@@ -1,0 +1,18 @@
+# Local Agent 模式依赖
+# 安装：pip install -r requirements_local_agent.txt
+#
+# 说明：
+#   - faster-whisper: 本地 STT，使用 Whisper 模型
+#   - edge-tts:       微软 Edge TTS（在线，免费，中文效果好）
+#   - openai:         LLM 客户端（支持所有 OpenAI-compatible API：Ollama/vLLM/llama.cpp 等）
+#   - miniaudio:      MP3 解码（TTS 音频格式转换，无需 ffmpeg）
+#   - soxr:           高质量音频重采样（边缘情况后备，项目已有）
+#
+# 可选（如果 miniaudio 无法安装，可用 pydub + ffmpeg 替代）：
+#   pydub
+#   # 以及系统安装 ffmpeg:  sudo apt install ffmpeg
+
+faster-whisper>=1.0.0
+edge-tts>=6.1.9
+openai>=1.30.0
+miniaudio>=1.58

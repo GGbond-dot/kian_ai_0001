@@ -1,0 +1,48 @@
+/logs
+/config/*
+!/config/README.md
+!/config/config.example.json
+
+.venv
+**/__pycache__/
+
+.idea/
+venv/
+
+# 音乐缓存
+cache/
+
+
+/models
+/backups
+
+# 打包相关
+/build
+/dist
+
+# MACOS
+.DS_Store
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+xiaozhi.spec
+
+/installer
+
+# 本地备份/临时残留
+*.bak-*
+
+# Codex / 本地临时目录
+.codex
+orangepi_aiagent/
+CODEX_HANDOFF.md
+
+# ROS2 overlay 构建产物
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
