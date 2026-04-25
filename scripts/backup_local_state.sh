@@ -37,7 +37,7 @@ tar -C "$ROOT_DIR" -czf "$ARCHIVE_PATH" \
   requirements.txt \
   requirements_local_agent.txt \
   pyproject.toml \
-  README.md
+  project_markdown/README.md
 
 echo "本地状态已备份:"
 echo "  archive : $ARCHIVE_PATH"

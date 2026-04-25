@@ -13,11 +13,29 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
-import rclpy
-from rclpy.executors import ExternalShutdownException
-from rclpy.node import Node
-from std_msgs.msg import UInt8
+try:
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+except Exception:
+    pass
+
+from src.utils.ros2_env import ensure_ros_runtime
+
+ros_install = ensure_ros_runtime(reexec=True)
+
+try:
+    import rclpy
+    from rclpy.executors import ExternalShutdownException
+    from rclpy.node import Node
+    from std_msgs.msg import UInt8
+except ImportError as exc:
+    print(f"[ros2_uint8_publisher] import error: {exc}", file=sys.stderr)
+    if ros_install is None:
+        print("[ros2_uint8_publisher] 未检测到 /opt/ros/<distro> 本机安装", file=sys.stderr)
+    raise SystemExit(1)
 
 DEFAULT_TOPIC = "/drone_command"
 DEFAULT_TIMEOUT_SEC = 30.0
@@ -28,7 +46,7 @@ DEFAULT_AFTER_MATCH_COUNT = 300
 
 class Int32Publisher(Node):
     def __init__(self, topic: str, value: int):
-        super().__init__("docker_uint8_publisher")
+        super().__init__("aiagent_uint8_publisher")
         self.publisher_ = self.create_publisher(UInt8, topic, 10)
         if not 0 <= value <= 255:
             raise ValueError(f"UInt8 value must be in [0, 255], got {value}")

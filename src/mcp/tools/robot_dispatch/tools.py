@@ -13,11 +13,10 @@
 跨机通信要求：
     - 两台机器在同一网段
     - ROS_DOMAIN_ID 一致（默认 10）
-    - 本机通过 Docker Humble Bridge 避免 Jazzy↔Humble 跨版本 DDS 问题
+    - PC 和开发板均使用本机 ROS2 Humble 时，无需 Docker bridge
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import subprocess
@@ -45,7 +44,7 @@ CMD_LAND = 2
 CMD_EMERGENCY_LAND = 3
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-BRIDGE_SCRIPT = PROJECT_ROOT / "scripts" / "docker_humble_bridge.py"
+UINT8_PUBLISHER_SCRIPT = PROJECT_ROOT / "scripts" / "ros2_int32_publisher.py"
 RVIZ_BIN = os.environ.get("RVIZ_BIN", "rviz2")
 RVIZ_CONFIG_PATH = Path(
     os.environ.get(
@@ -69,17 +68,15 @@ def _append_status(task_id: str, status: str, detail: str = ""):
 
 
 def _publish_int_fire_and_forget(topic: str, value: int) -> tuple[str, str]:
-    """Fire-and-forget 发布 Int32：立即返回，后台持续发送 ROS2_PUBLISH_DURATION_SEC 秒。
+    """Fire-and-forget 发布 UInt8：立即返回，后台持续发送一段时间。
 
-    通过 docker_humble_bridge.py 的 pub-int 子命令进入 Humble 容器，
-    在容器内执行 ros2_int32_publisher.py。使用 start_new_session=True
-    让子进程脱离父进程管控。
+    现在 PC 和开发板均使用本机 ROS2 Humble，直接调用本仓库的 UInt8
+    发布脚本。该脚本会自动探测 /opt/ros/<distro> 并补齐 rclpy 环境。
     """
     count = int(ROS2_PUBLISH_DURATION_SEC / ROS2_PUBLISH_INTERVAL_SEC)
     cmd = [
         ROS2_PYTHON,
-        str(BRIDGE_SCRIPT),
-        "pub-int",
+        str(UINT8_PUBLISHER_SCRIPT),
         "--topic", topic,
         "--value", str(value),
         "--timeout", str(ROS2_PUBLISH_DURATION_SEC),
@@ -95,7 +92,7 @@ def _publish_int_fire_and_forget(topic: str, value: int) -> tuple[str, str]:
             start_new_session=True,
         )
     except FileNotFoundError:
-        return "error", f"未找到 bridge 脚本：{BRIDGE_SCRIPT}"
+        return "error", f"未找到 UInt8 发布脚本：{UINT8_PUBLISHER_SCRIPT}"
     except Exception as exc:
         return "error", f"启动发布进程失败：{exc}"
 

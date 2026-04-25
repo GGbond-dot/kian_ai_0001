@@ -29,6 +29,7 @@ class Ros2Installation:
     distro: str
     root: Path
     python_site_packages: Path
+    python_package_paths: tuple[Path, ...]
     python_executable: str
 
     @property
@@ -65,9 +66,11 @@ class Ros2Installation:
         env["ROS_VERSION"] = "2"
         env["ROS_HOME"] = str(ros_home)
         env["ROS_LOG_DIR"] = str(ros_log_dir)
-        env["PYTHONPATH"] = _prepend_path(
-            str(self.python_site_packages), env.get("PYTHONPATH", "")
-        )
+        python_paths = self.python_package_paths or (self.python_site_packages,)
+        for python_path in reversed(python_paths):
+            env["PYTHONPATH"] = _prepend_path(
+                str(python_path), env.get("PYTHONPATH", "")
+            )
         env["LD_LIBRARY_PATH"] = _prepend_path(
             str(self.lib_path), env.get("LD_LIBRARY_PATH", "")
         )
@@ -107,15 +110,29 @@ def _iter_distro_candidates(preferred_distro: Optional[str]) -> list[str]:
     return ordered
 
 
-def _find_site_packages(root: Path) -> Optional[Path]:
-    candidates = sorted((root / "lib").glob("python*/site-packages"))
+def _find_python_package_paths(root: Path) -> tuple[Path, ...]:
+    candidates = sorted(
+        [
+            *(root / "local" / "lib").glob("python*/dist-packages"),
+            *(root / "local" / "lib").glob("python*/site-packages"),
+            *(root / "lib").glob("python*/dist-packages"),
+            *(root / "lib").glob("python*/site-packages"),
+        ]
+    )
     if not candidates:
-        return None
+        return ()
 
     for candidate in candidates:
         if (candidate / "rclpy").exists():
-            return candidate
-    return candidates[0]
+            return (candidate, *[path for path in candidates if path != candidate])
+    return tuple(candidates)
+
+
+def _find_site_packages(root: Path) -> Optional[Path]:
+    package_paths = _find_python_package_paths(root)
+    if not package_paths:
+        return None
+    return package_paths[0]
 
 
 def _find_python_executable(python_version: str) -> str:
@@ -146,9 +163,10 @@ def discover_ros_installation(
 ) -> Optional[Ros2Installation]:
     for distro in _iter_distro_candidates(preferred_distro):
         root = ROS_ROOT / distro
-        site_packages = _find_site_packages(root)
-        if site_packages is None:
+        package_paths = _find_python_package_paths(root)
+        if not package_paths:
             continue
+        site_packages = package_paths[0]
 
         python_version = site_packages.parent.name.removeprefix("python")
         python_executable = _find_python_executable(python_version)
@@ -156,6 +174,7 @@ def discover_ros_installation(
             distro=distro,
             root=root,
             python_site_packages=site_packages,
+            python_package_paths=package_paths,
             python_executable=python_executable,
         )
 
@@ -174,11 +193,7 @@ def ensure_ros_runtime(
     if not reexec or os.environ.get(RUNTIME_READY_FLAG) == "1":
         return install
 
-    current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-    current_executable = os.path.realpath(sys.executable)
-    target_executable = os.path.realpath(install.python_executable)
-
-    if current_version != install.python_version or current_executable != target_executable:
+    if os.environ.get(RUNTIME_READY_FLAG) != "1":
         env = install.build_env()
         env[RUNTIME_READY_FLAG] = "1"
         os.execve(install.python_executable, [install.python_executable] + sys.argv, env)

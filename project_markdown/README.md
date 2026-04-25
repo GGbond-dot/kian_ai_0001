@@ -17,7 +17,7 @@
 
 更细的专项说明见：
 
-- [config/README.md](config/README.md)
+- [config/README.md](../config/README.md)
 - [ROS2_DEBUG_NOTES.md](ROS2_DEBUG_NOTES.md)
 - [README.en.md](README.en.md)
 
@@ -28,7 +28,7 @@
 - `README.md`
 - `config/README.md`
 - `config/config.example.json`
-- `documents/docs/guide/系统依赖安装.md`
+- `../documents/docs/guide/系统依赖安装.md`
 
 只看 `README.md` 可以完成大部分启动，但还不够覆盖所有平台差异。尤其是：
 
@@ -163,8 +163,9 @@ aiagent/
 ├── src/
 ├── assets/
 ├── libs/
-├── README.md
-└── ROS2_DEBUG_NOTES.md
+└── project_markdown/
+    ├── README.md
+    └── ROS2_DEBUG_NOTES.md
 ```
 
 核心目录说明：
@@ -266,7 +267,7 @@ bash scripts/test_ros2_e2e.sh
 当前约定：
 
 - 默认 topic：`/robot_task`
-- 推荐 ROS 2 Jazzy
+- 推荐 ROS 2 Humble
 - `ROS_DOMAIN_ID` 必须小于 `233`
 
 ## 哪些内容不会进 git

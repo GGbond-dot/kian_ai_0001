@@ -16,7 +16,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="小智Ai客户端")
     parser.add_argument(
         "--mode",
-        choices=["gui", "cli"],
+        choices=["gui", "cli", "web"],
         default="gui",
         help="运行模式：gui(图形界面) 或 cli(命令行)",
     )

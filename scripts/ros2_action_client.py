@@ -31,6 +31,10 @@ try:
 except Exception:
     pass
 
+from src.utils.ros2_env import ensure_ros_runtime
+
+ensure_ros_runtime(reexec=True)
+
 try:
     import rclpy
     from action_msgs.msg import GoalStatus

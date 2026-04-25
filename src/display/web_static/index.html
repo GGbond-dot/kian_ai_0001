@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>AI Agent Console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- 星云背景 -->
+<div class="nebula nebula-left"></div>
+<div class="nebula nebula-right"></div>
+
+<div id="app" data-state="idle">
+
+  <!-- 标题栏 -->
+  <div class="title-bar">
+    <div class="title-dot"></div>
+    <div class="title-info">
+      <div class="title-name">AI Agent Console</div>
+      <div class="title-sub">STANDBY</div>
+    </div>
+    <div class="conn-badge disconnected">OFFLINE</div>
+  </div>
+
+  <!-- 主面板 -->
+  <div class="main-panel">
+
+    <!-- 状态条 -->
+    <div class="status-strip">
+      <div class="status-glow"></div>
+      <div class="status-dot"></div>
+      <div class="status-text-group">
+        <div class="status-capsule-label">STANDBY</div>
+        <div class="status-main-text">状态: 未连接</div>
+      </div>
+      <div class="audio-bars">
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+      </div>
+    </div>
+
+    <!-- 中央舞台 -->
+    <div class="center-stage">
+      <div class="orb-container">
+        <!-- 外层呼吸光圈 -->
+        <div class="orb-outer"></div>
+        <!-- 轨道环 -->
+        <div class="orb-ring ring1"></div>
+        <div class="orb-ring ring2"></div>
+        <!-- 轨道粒子 -->
+        <div class="orbit">
+          <div class="orbit-dot d1"></div>
+          <div class="orbit-dot d2"></div>
+        </div>
+        <div class="orbit fast">
+          <div class="orbit-dot d3"></div>
+          <div class="orbit-dot d4"></div>
+        </div>
+        <!-- 核心球体 -->
+        <div class="core-shell">
+          <div class="core-inner">
+            <div class="emotion-display">
+              <span class="emoji">&#x1F60A;</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage-label">READY</div>
+      <div class="stage-bars">
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+      </div>
+    </div>
+
+    <!-- 文本卡片 -->
+    <div class="transcript-card">
+      <div class="transcript-header">LIVE TRANSCRIPT</div>
+      <div class="transcript-body">待命</div>
+    </div>
+
+  </div>
+
+  <!-- 底部控制栏 -->
+  <div class="bottom-bar">
+    <button id="btn-manual" class="btn btn-primary">按住后说话</button>
+    <button id="btn-auto" class="btn btn-primary" style="display:none">开始对话</button>
+    <button id="btn-abort" class="btn btn-secondary">打断对话</button>
+    <div class="input-group">
+      <input id="text-input" class="text-input" type="text" placeholder="输入文字..." autocomplete="off">
+      <button id="btn-send" class="btn btn-send">发送</button>
+    </div>
+    <button id="btn-mode" class="btn btn-secondary">手动对话</button>
+  </div>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -14,6 +14,17 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+except Exception:
+    pass
+
+from src.utils.ros2_env import ensure_ros_runtime
+
+ensure_ros_runtime(reexec=True)
+
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -28,7 +39,7 @@ DEFAULT_AFTER_MATCH_COUNT = 5
 
 class StringPublisher(Node):
     def __init__(self, topic: str, payload: str):
-        super().__init__("docker_string_publisher")
+        super().__init__("aiagent_string_publisher")
         self.publisher_ = self.create_publisher(String, topic, 10)
         self.msg = String()
         self.msg.data = payload

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 一键启动本地 AI + ROS2 Humble Docker bridge + Action 派单环境。
+# 一键启动本地 AI + 本机 ROS2 Humble + Action 派单环境。
 # 默认读取 config/ros2_action.env 中的自定义配置；若不存在则使用脚本内默认值。
 
 set -euo pipefail
@@ -15,7 +15,7 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 export ROS2_DISPATCH_TRANSPORT="${ROS2_DISPATCH_TRANSPORT:-action}"
-export ROS2_PUBLISH_MODE="${ROS2_PUBLISH_MODE:-docker_humble_bridge}"
+export ROS2_PUBLISH_MODE="${ROS2_PUBLISH_MODE:-auto}"
 export ROS2_ACTION_NAME="${ROS2_ACTION_NAME:-/dispatch_order}"
 export ROS2_ACTION_TYPE="${ROS2_ACTION_TYPE:-robot_task_interfaces/action/DispatchOrder}"
 export ROS2_ACTION_GOAL_MODE="${ROS2_ACTION_GOAL_MODE:-merged_task_payload}"
@@ -32,6 +32,16 @@ export AIAGENT_PROTOCOL="${AIAGENT_PROTOCOL:-local}"
 
 cd "${PROJECT_ROOT}"
 
+if [[ -f "/opt/ros/humble/setup.bash" ]]; then
+  # shellcheck disable=SC1091
+  source /opt/ros/humble/setup.bash
+fi
+
+if [[ -f "${ROS2_HUMBLE_HOST_WS}/install/setup.bash" ]]; then
+  # shellcheck disable=SC1090
+  source "${ROS2_HUMBLE_HOST_WS}/install/setup.bash"
+fi
+
 echo "=== AI Agent Action Launch ==="
 echo "ROS2_DISPATCH_TRANSPORT=${ROS2_DISPATCH_TRANSPORT}"
 echo "ROS2_PUBLISH_MODE=${ROS2_PUBLISH_MODE}"
@@ -45,5 +55,4 @@ echo "AIAGENT_MODE=${AIAGENT_MODE}"
 echo "AIAGENT_PROTOCOL=${AIAGENT_PROTOCOL}"
 echo ""
 
-python3 scripts/docker_humble_bridge.py start
 exec python3 main.py --mode "${AIAGENT_MODE}" --protocol "${AIAGENT_PROTOCOL}" "$@"
