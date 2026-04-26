@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SLAM Viewer</title>
+  <link rel="stylesheet" href="/static/slam.css">
+</head>
+<body>
+
+<div id="slam-app">
+
+  <div class="slam-topbar">
+    <a class="back-link" href="/">← 返回</a>
+    <div class="title">SLAM Viewer</div>
+    <div class="conn-badge disconnected">OFFLINE</div>
+  </div>
+
+  <canvas id="slam-canvas"></canvas>
+
+  <div class="slam-statusbar">
+    <span id="stat-map">地图点: -</span>
+    <span id="stat-scan">实时点: -</span>
+    <span id="stat-pose">位姿: -</span>
+    <span id="stat-fps">FPS: -</span>
+  </div>
+
+</div>
+
+<!--
+  three.js 通过 ES module 加载. 默认从 /static/vendor/ 取本地副本.
+  详见 web_static/vendor/README.md (本地放置说明).
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three.module.min.js",
+    "three/addons/": "/static/vendor/three-addons/"
+  }
+}
+</script>
+<script type="module" src="/static/slam.js"></script>
+
+</body>
+</html>

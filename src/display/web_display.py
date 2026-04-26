@@ -8,6 +8,7 @@ import asyncio
 from typing import Callable, Optional
 
 from src.display.base_display import BaseDisplay
+from src.display.slam_bridge import SlamBridge
 from src.display.web_server import WebServer
 
 
@@ -17,6 +18,7 @@ class WebDisplay(BaseDisplay):
     def __init__(self, host: str = "0.0.0.0", port: int = 8080):
         super().__init__()
         self.server = WebServer(host, port)
+        self.slam_bridge = SlamBridge(self.server)
 
         # 自动模式状态
         self.auto_mode = False
@@ -76,11 +78,13 @@ class WebDisplay(BaseDisplay):
     async def start(self):
         """启动 Web 服务器 (会阻塞直到服务器关闭)."""
         self.logger.info("WebDisplay 启动中...")
+        await self.slam_bridge.start()
         await self.server.start()
 
     async def close(self):
         """关闭 Web 服务器."""
         self.logger.info("WebDisplay 关闭中...")
+        await self.slam_bridge.stop()
         await self.server.stop()
 
     # ===================== 控制指令处理 =====================

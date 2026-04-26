@@ -34,6 +34,7 @@ class WebServer:
         self.port = port
         self.app = FastAPI(title="AI Agent Console")
         self._connections: set[WebSocket] = set()
+        self._slam_connections: set[WebSocket] = set()
         self._server = None
         self._command_callback: Optional[Callable] = None
 
@@ -68,6 +69,12 @@ class WebServer:
             index_file = STATIC_DIR / "index.html"
             return HTMLResponse(index_file.read_text(encoding="utf-8"))
 
+        # SLAM 可视化页面
+        @app.get("/slam")
+        async def slam_page():
+            slam_file = STATIC_DIR / "slam.html"
+            return HTMLResponse(slam_file.read_text(encoding="utf-8"))
+
         # 静态文件
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -82,10 +89,15 @@ class WebServer:
                 return HTMLResponse("Not found", status_code=404)
             return FileResponse(str(file_path))
 
-        # WebSocket
+        # WebSocket — 控制信令
         @app.websocket("/ws")
         async def ws_endpoint(websocket: WebSocket):
             await self._handle_ws(websocket)
+
+        # WebSocket — SLAM 二进制流 (单独通道避免与控制信令互相阻塞)
+        @app.websocket("/ws/slam")
+        async def ws_slam_endpoint(websocket: WebSocket):
+            await self._handle_slam_ws(websocket)
 
     # ===================== WebSocket 处理 =====================
 
@@ -119,6 +131,35 @@ class WebServer:
             logger.info(
                 "WebSocket 客户端已断开, 当前连接数: %d", len(self._connections)
             )
+
+    async def _handle_slam_ws(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._slam_connections.add(websocket)
+        logger.info("SLAM WS 已连接, 当前连接数: %d", len(self._slam_connections))
+        try:
+            while True:
+                # 当前 SLAM 通道是单向推流, 仅保活
+                await websocket.receive_bytes()
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug("SLAM WS 连接异常: %s", e)
+        finally:
+            self._slam_connections.discard(websocket)
+            logger.info("SLAM WS 已断开, 当前连接数: %d", len(self._slam_connections))
+
+    async def broadcast_slam_bytes(self, payload: bytes) -> None:
+        """广播二进制 SLAM 帧给所有 /ws/slam 连接."""
+        if not self._slam_connections:
+            return
+        dead: list[WebSocket] = []
+        for ws in self._slam_connections:
+            try:
+                await ws.send_bytes(payload)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._slam_connections.discard(ws)
 
     async def broadcast(self, data: dict) -> None:
         """广播消息给所有活跃的 WebSocket 连接."""
@@ -162,9 +203,10 @@ class WebServer:
             logger.info("Web 服务器已停止")
 
         # 关闭所有连接
-        for ws in list(self._connections):
+        for ws in list(self._connections) + list(self._slam_connections):
             try:
                 await ws.close()
             except Exception:
                 pass
         self._connections.clear()
+        self._slam_connections.clear()

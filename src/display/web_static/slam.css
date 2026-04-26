@@ -1,0 +1,79 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #06080c;
+  color: #cfd8e3;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+#slam-app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== 顶部栏 ===== */
+.slam-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: rgba(12, 16, 24, 0.85);
+  border-bottom: 1px solid rgba(80, 120, 200, 0.18);
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+.back-link {
+  color: #7eb8ff;
+  text-decoration: none;
+  font-size: 14px;
+  padding: 4px 10px;
+  border: 1px solid rgba(126, 184, 255, 0.3);
+  border-radius: 4px;
+}
+.back-link:hover { background: rgba(126, 184, 255, 0.1); }
+
+.slam-topbar .title {
+  flex: 1;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: #e6eef7;
+}
+
+.conn-badge {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: #103a1f;
+  color: #6dffa6;
+}
+.conn-badge.disconnected {
+  background: #3a1010;
+  color: #ff6d6d;
+}
+
+/* ===== Canvas ===== */
+#slam-canvas {
+  flex: 1;
+  width: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* ===== 底部状态栏 ===== */
+.slam-statusbar {
+  display: flex;
+  gap: 24px;
+  padding: 8px 16px;
+  background: rgba(12, 16, 24, 0.85);
+  border-top: 1px solid rgba(80, 120, 200, 0.18);
+  font-size: 12px;
+  color: #8aa0b8;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
