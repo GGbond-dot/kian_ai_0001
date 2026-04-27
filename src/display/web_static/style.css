@@ -116,6 +116,28 @@ html, body {
   color: #4ade80;
   border: 1px solid rgba(74, 222, 128, 0.3);
 }
+.title-action {
+  margin-left: 8px;
+  width: 32px;
+  height: 28px;
+  border-radius: 8px;
+  background: #0b1830;
+  border: 1px solid #21406f;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.title-action:active { background: #122746; }
+
+@media (pointer: coarse) {
+  .title-action { width: 44px; height: 36px; font-size: 18px; }
+}
+
 .conn-badge.disconnected {
   background: rgba(248, 113, 113, 0.15);
   color: #f87171;
@@ -616,4 +638,112 @@ html, body {
   .bottom-bar { gap: 6px; }
   .btn { font-size: 11px; padding: 0 10px; min-width: 60px; }
   .btn-primary { min-width: 80px; }
+}
+
+@media (max-width: 900px) {
+  .bottom-bar {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px;
+  }
+  .input-group {
+    order: -1;
+    flex-basis: 100%;
+    min-width: 0;
+  }
+  .text-input {
+    height: 52px;
+    font-size: 15px;
+    padding: 0 14px;
+  }
+  .btn-send {
+    width: 84px;
+    height: 52px;
+    font-size: 14px;
+  }
+  .btn-primary,
+  .btn-secondary {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+    height: 48px;
+    font-size: 13px;
+  }
+}
+
+/* 触控反馈：去掉 iOS Safari 的灰色高亮，保持自定义 :active 效果 */
+input, button, .btn { touch-action: manipulation; }
+
+/* ---------- 触控设备适配（覆盖平板 / 手机 / 触屏笔记本）----------
+   用 (pointer: coarse) 而不是宽度阈值，避免 2560×1600 平板因 DPR=2
+   实际 CSS 宽度 1280px 命中不到 max-width: 900px 的问题。
+
+   核心：底栏 fixed 在视口底部，永远可见；输入框单独一行；
+   主内容区留出底栏高度的 padding，避免被遮住。
+*/
+@media (pointer: coarse) {
+  /* 用 svh / dvh 取较小值，规避地址栏占空间问题 */
+  #app {
+    height: 100vh;
+    height: 100svh;        /* 静态小视口（地址栏总在时） */
+    height: 100dvh;        /* 动态视口，最优 */
+  }
+
+  .main-panel {
+    /* 给 fixed bottom-bar 让出空间：输入行 + 按钮行 + 内边距 ≈ 170px */
+    padding-bottom: 180px;
+  }
+
+  .bottom-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px max(12px, env(safe-area-inset-left))
+             calc(12px + env(safe-area-inset-bottom, 0px))
+             max(12px, env(safe-area-inset-right));
+    background: #040a14;
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -10px 24px rgba(0,0,0,0.4);
+  }
+
+  /* 输入框独占第一行，发送按钮跟在右边 */
+  .input-group {
+    order: -1;
+    flex-basis: 100%;
+    min-width: 0;
+    gap: 8px;
+  }
+  .text-input {
+    height: 52px;
+    font-size: 16px;       /* iOS 16px 以下会强制缩放，给 16 防触发 */
+    padding: 0 14px;
+  }
+  .btn-send {
+    width: 92px;
+    height: 52px;
+    font-size: 14px;
+  }
+
+  /* 第二行的操作按钮平铺 */
+  .btn-primary,
+  .btn-secondary {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+    height: 48px;
+    font-size: 13px;
+  }
+
+  /* 中心 orb 在窄高屏上别太占空间 */
+  .orb-container {
+    width: min(60vw, 45vh, 280px);
+  }
+  .transcript-card {
+    min-height: 100px;
+    max-height: 140px;
+  }
 }

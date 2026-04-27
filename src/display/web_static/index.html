@@ -2,9 +2,15 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AI Agent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#040a14">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icon.svg">
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
   <title>AI Agent Console</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -24,6 +30,7 @@
       <div class="title-sub">STANDBY</div>
     </div>
     <div class="conn-badge disconnected">OFFLINE</div>
+    <button id="btn-fullscreen" class="title-action" title="全屏" aria-label="全屏">⛶</button>
   </div>
 
   <!-- 主面板 -->
@@ -108,5 +115,14 @@
 </div>
 
 <script src="/static/app.js"></script>
+<script>
+  // 注册 Service Worker — 让浏览器把页面识别为可安装 PWA
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' })
+        .catch(err => console.warn('SW 注册失败:', err));
+    });
+  }
+</script>
 </body>
 </html>

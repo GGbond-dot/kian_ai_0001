@@ -39,7 +39,7 @@ const mapGeom = new THREE.BufferGeometry();
 mapGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
 mapGeom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(0), 3));
 const mapMat = new THREE.PointsMaterial({
-  size: 0.04, vertexColors: true, sizeAttenuation: true,
+  size: 0.08, vertexColors: true, sizeAttenuation: true,
 });
 const mapPoints = new THREE.Points(mapGeom, mapMat);
 scene.add(mapPoints);
@@ -48,7 +48,7 @@ scene.add(mapPoints);
 const scanGeom = new THREE.BufferGeometry();
 scanGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
 const scanMat = new THREE.PointsMaterial({
-  size: 0.06, color: 0xffaa33, sizeAttenuation: true,
+  size: 0.10, color: 0xffaa33, sizeAttenuation: true,
 });
 const scanPoints = new THREE.Points(scanGeom, scanMat);
 scene.add(scanPoints);
@@ -102,7 +102,8 @@ function onBinary(buf) {
 function updatePoints(buf, geom, withColor) {
   const dv = new DataView(buf);
   const n = dv.getUint32(1, true);
-  const xyz = new Float32Array(buf, 5, n * 3);
+  // header 5 字节, float32 要求 4 字节对齐, 必须 slice 出新 buffer
+  const xyz = new Float32Array(buf.slice(5, 5 + n * 12));
 
   geom.setAttribute('position', new THREE.BufferAttribute(xyz, 3));
 
@@ -145,7 +146,7 @@ function updateOdom(dv) {
 function updatePath(buf) {
   const dv = new DataView(buf);
   const n = dv.getUint32(1, true);
-  const xyz = new Float32Array(buf, 5, n * 3);
+  const xyz = new Float32Array(buf.slice(5, 5 + n * 12));
   pathGeom.setAttribute('position', new THREE.BufferAttribute(xyz, 3));
   pathGeom.setDrawRange(0, n);
   pathGeom.computeBoundingSphere();

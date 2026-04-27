@@ -1,3 +1,11 @@
+"""
+小智云端 MQTT 协议（遗留，默认不启用）。
+
+本项目默认协议是 local（src/protocols/local_agent_protocol.py），直接接自己的 LLM API。
+本文件仅在 `--protocol mqtt` 时使用，需要小智 MQTT broker 凭证。
+保留是为了备用，不建议作为主路。
+"""
+
 import asyncio
 import json
 import socket

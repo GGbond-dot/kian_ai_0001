@@ -1,12 +1,14 @@
 # aiagent
 
-一个基于 Python 的桌面语音 AI 客户端，支持：
+一个基于 Python 的桌面/Web AI 客户端，支持：
 
-- GUI / CLI 两种运行方式
-- `websocket` / `mqtt` / `local` 三种协议
+- GUI / CLI / Web 三种运行方式
+- **本地 Agent 协议（默认）** ：直接接你自己的 LLM API，不依赖任何云端服务
 - MCP 工具调用
-- 本地 Agent 闭环
 - ROS2 任务发布与联调
+- SLAM Web Viewer（`/slam` 页面，three.js 实时可视化 FAST-LIO 输出）
+
+历史上这个仓库 fork 自 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi)，曾用过小智云端协议（websocket / mqtt）。**当前默认已切换到本地 Agent**，小智相关代码保留但不再使用。如果你想用小智，看本文档底部的"遗留：小智协议"。
 
 这个 README 的目标不是覆盖所有细节，而是让第一次接手这个仓库的人能快速看懂：
 
@@ -19,7 +21,7 @@
 
 - [config/README.md](../config/README.md)
 - [ROS2_DEBUG_NOTES.md](ROS2_DEBUG_NOTES.md)
-- [README.en.md](README.en.md)
+- [SLAM_WEB_VIEWER_DESIGN.md](SLAM_WEB_VIEWER_DESIGN.md)
 
 ## 部署前先看
 
@@ -28,14 +30,6 @@
 - `README.md`
 - `config/README.md`
 - `config/config.example.json`
-- `../documents/docs/guide/系统依赖安装.md`
-
-只看 `README.md` 可以完成大部分启动，但还不够覆盖所有平台差异。尤其是：
-
-- Linux 上的系统依赖安装
-- `PyQt5` 安装失败时的替代路线
-- `Opus` / `PortAudio` / `SoundDevice` 的系统库问题
-- 本地配置和密钥填写
 
 ## 快速开始
 
@@ -106,7 +100,7 @@ pip install -r requirements_local_agent.txt
 cp config/config.example.json config/config.json
 ```
 
-至少补齐这些字段：
+至少补齐这些字段（本地 Agent 必填）：
 
 - `LLM.api_key`
 - `LLM.base_url`
@@ -114,44 +108,42 @@ cp config/config.example.json config/config.json
 - `SYSTEM_OPTIONS.CLIENT_ID`
 - `SYSTEM_OPTIONS.DEVICE_ID`
 
-如果要接云端协议，再补：
-
-- `WEBSOCKET_ACCESS_TOKEN`
-- 或 `MQTT_INFO.*`
-
 ### 5. 运行
 
-GUI + 本地协议：
+默认协议是 `local`，所以最简启动就够：
 
 ```bash
-python main.py --mode gui --protocol local
+# Web（推荐，可远程访问、含 /slam 可视化）
+python main.py --mode web
+
+# GUI 桌面
+python main.py --mode gui
+
+# CLI 终端
+python main.py --mode cli
 ```
 
-CLI + 本地协议：
+显式写也等价：
 
 ```bash
+python main.py --mode web --protocol local
+python main.py --mode gui --protocol local
 python main.py --mode cli --protocol local
 ```
 
-GUI + 云端 websocket：
+Web 模式启动后：
 
-```bash
-python main.py --mode gui --protocol websocket
-```
+- 控制页面：`http://<本机IP>:8080/`
+- SLAM 可视化：`http://<本机IP>:8080/slam`
 
 ## 可复刻性说明
 
-如果你的目标是“把仓库交给别人，让别人尽量无脑复刻”，当前仓库已经接近可用，但还要满足这几个前提：
+如果你的目标是"把仓库交给别人，让别人尽量无脑复刻"，当前仓库已经接近可用，但还要满足这几个前提：
 
 1. 对方按 README 安装系统依赖
 2. 对方知道 `PyQt5` 失败时要切换到 `requirements_no_pyqt.txt`
-3. 对方按 `config/config.example.json` 补齐真实配置
+3. 对方按 `config/config.example.json` 补齐真实配置（至少 `LLM.*`）
 4. 如果你依赖本地模型、唤醒词文件、缓存或运行状态，还要额外给 `backups/` 归档
-
-也就是说：
-
-- 仅靠当前 `README.md`：基本可复刻主流程
-- 要完整、稳定复刻：还需要 `config/README.md` 和 `documents/docs/guide/系统依赖安装.md`
 
 ## 项目结构
 
@@ -165,7 +157,8 @@ aiagent/
 ├── libs/
 └── project_markdown/
     ├── README.md
-    └── ROS2_DEBUG_NOTES.md
+    ├── ROS2_DEBUG_NOTES.md
+    └── SLAM_WEB_VIEWER_DESIGN.md
 ```
 
 核心目录说明：
@@ -175,7 +168,8 @@ aiagent/
 - `src/application.py`
   应用生命周期、设备状态切换、协议与 UI 调度的主逻辑
 - `src/protocols/`
-  `websocket` / `mqtt` / `local` 三种协议适配
+  - `local_agent_protocol.py` ← **当前默认**
+  - `websocket_protocol.py` / `mqtt_protocol.py` ← 小智遗留，保留不删
 - `src/llm/`
   LLM 接入、工具调用循环、Responses API 兼容逻辑
 - `src/mcp/tools/`
@@ -183,9 +177,9 @@ aiagent/
 - `src/plugins/`
   UI、快捷键、唤醒词、音频等插件层
 - `src/display/`
-  GUI / CLI 显示层
+  GUI / CLI / Web 显示层（Web 含 `/slam` 三维可视化、SlamBridge ROS 桥）
 - `src/views/`
-  设置窗口、激活窗口等界面组件
+  设置窗口、激活窗口等界面组件（小智时代留下的，GUI 模式仍用）
 - `scripts/`
   调试、诊断、ROS2、自检、备份脚本
 
@@ -194,24 +188,18 @@ aiagent/
 ### 界面模式
 
 - `--mode gui`
-  桌面图形界面，适合日常使用
+  桌面图形界面
 - `--mode cli`
-  终端模式，适合无桌面环境或调试
+  终端模式
+- `--mode web`
+  Web 模式（FastAPI + WebSocket，可远程访问，含 SLAM 可视化）
 
 ### 协议模式
 
-- `--protocol websocket`
-  连接小智服务端
-- `--protocol mqtt`
-  走 MQTT 通道
-- `--protocol local`
-  本地 STT + LLM + TTS 闭环，不依赖小智云端
-
-如果你只是想先把项目跑起来，优先用：
-
-```bash
-python main.py --mode gui --protocol local
-```
+- `--protocol local`（**默认**）
+  本地 STT + LLM + TTS 闭环，直接走你自己的 LLM API
+- `--protocol websocket` / `--protocol mqtt`
+  小智云端协议，遗留保留，**默认不走**
 
 ## 常用脚本
 
@@ -270,6 +258,22 @@ bash scripts/test_ros2_e2e.sh
 - 推荐 ROS 2 Humble
 - `ROS_DOMAIN_ID` 必须小于 `233`
 
+## SLAM Web Viewer
+
+`/slam` 页面用 three.js 渲染 FAST-LIO 输出的累积地图、实时 scan、轨迹和位姿。
+设计、topic 列表、参数说明见 [SLAM_WEB_VIEWER_DESIGN.md](SLAM_WEB_VIEWER_DESIGN.md)。
+
+启动方式（DK2500 上的 aiagent 终端）：
+
+```bash
+export ROS_DOMAIN_ID=10
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+source .venv/bin/activate
+python3 main.py --mode web
+```
+
+然后浏览器开 `http://<DK2500_IP>:8080/slam`。
+
 ## 哪些内容不会进 git
 
 这个仓库默认只跟踪源码、脚本、模板配置和文档。
@@ -309,10 +313,11 @@ bash scripts/backup_local_state.sh
 
 ## 给下一个维护者的建议
 
-- 先看 `main.py`、`src/application.py`、`src/protocols/`、`src/mcp/tools/`
+- 先看 `main.py`、`src/application.py`、`src/protocols/local_agent_protocol.py`、`src/mcp/tools/`
 - 改 UI 时优先看 `src/display/` 和 `src/views/`
 - 改本地 Agent 时优先看 `src/llm/`、`src/protocols/local_agent_protocol.py`
 - 改 ROS2 时优先看 `scripts/ros2_*.py` 和 `src/mcp/tools/robot_dispatch/`
+- 改 SLAM Web Viewer 时优先看 `src/display/slam_bridge.py`、`src/display/web_static/slam.js`、`src/display/slam_constants.py`
 - 新增本地状态目录时，记得同步更新 `.gitignore` 和 `scripts/backup_local_state.sh`
 
 ## 当前整理原则
@@ -323,3 +328,21 @@ bash scripts/backup_local_state.sh
 - 运行态文件不进 git
 - 备份文件不进 git
 - 业务逻辑优先按 `src/` 目录归类，不在根目录堆脚本
+
+## 遗留：小智协议
+
+历史上这个仓库连过小智云端（`websocket` / `mqtt` + OTA + 设备激活）。这部分代码现在**保留但默认不启用**，相关文件：
+
+- `src/protocols/websocket_protocol.py`、`src/protocols/mqtt_protocol.py`
+- `src/core/ota.py`、`src/core/system_initializer.py`
+- `src/utils/device_activator.py`
+
+如果你确实要回到小智模式：
+
+```bash
+python main.py --mode gui --protocol websocket
+```
+
+需要在 `config/config.json` 里补齐 `WEBSOCKET_ACCESS_TOKEN` 或 `MQTT_INFO.*`，并保证 OTA 服务器认你的设备 SN/MAC。否则会看到 `OTA服务器错误: HTTP 400` 然后协议连接失败。
+
+不建议。本地 Agent 已经够用，自己掌控。

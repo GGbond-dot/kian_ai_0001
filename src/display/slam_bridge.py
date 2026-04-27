@@ -176,17 +176,23 @@ class SlamBridge:
         import rclpy
         from rclpy.executors import MultiThreadedExecutor
         from rclpy.node import Node
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
         # TODO(slam-team): 确认下列消息类型导入路径正确
         from nav_msgs.msg import Odometry, Path
         from sensor_msgs.msg import PointCloud2
 
+        # 点云通常以 Best Effort 发布 (传感器数据 QoS), Reliable 订阅会收不到
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=5,
+        )
+
         rclpy.init(args=None)
         node = Node("aiagent_slam_bridge")
 
         def on_map(msg: PointCloud2):
-            # TODO: pointcloud2 → numpy → voxel downsample → encode
-            # 见 _downsample_pc2() 占位实现
             now = time.time()
             if now - self._last_map_t < 1.0 / C.SLAM_MAP_MAX_HZ:
                 return
@@ -221,8 +227,8 @@ class SlamBridge:
             arr = np.array(pts, dtype=np.float32)
             self._schedule_send(encode_points(C.CHAN_PATH, arr))
 
-        node.create_subscription(PointCloud2, C.SLAM_TOPIC_MAP, on_map, 1)
-        node.create_subscription(PointCloud2, C.SLAM_TOPIC_SCAN, on_scan, 5)
+        node.create_subscription(PointCloud2, C.SLAM_TOPIC_MAP, on_map, sensor_qos)
+        node.create_subscription(PointCloud2, C.SLAM_TOPIC_SCAN, on_scan, sensor_qos)
         node.create_subscription(Odometry, C.SLAM_TOPIC_ODOM, on_odom, 10)
         node.create_subscription(Path, C.SLAM_TOPIC_PATH, on_path, 1)
 

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-四阶段初始化流程测试脚本 展示设备身份准备、配置管理、OTA配置获取三个阶段的协调工作 激活流程由用户自己实现.
+小智设备四阶段初始化流程（遗留，默认不启用）。
+
+仅在 `--protocol websocket` / `--protocol mqtt` 时被 main.py 调用。
+本项目默认 `--protocol local`，main.py:start_app 会跳过整个激活流程。
+保留是为了备用，不建议作为主路。
 """
 
 import asyncio

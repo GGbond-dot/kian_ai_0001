@@ -1,3 +1,11 @@
+"""
+小智云端 WebSocket 协议（遗留，默认不启用）。
+
+本项目默认协议是 local（src/protocols/local_agent_protocol.py），直接接自己的 LLM API。
+本文件仅在 `--protocol websocket` 时使用，需要 OTA 服务器认设备 SN/MAC + 有效 access token。
+保留是为了备用，不建议作为主路。
+"""
+
 import asyncio
 import json
 import ssl

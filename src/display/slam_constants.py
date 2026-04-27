@@ -6,19 +6,19 @@ SLAM Web Viewer — 配置常量集中点.
 """
 
 # ===================== ROS Topic 名称 =====================
-# TODO(slam-team): 确认 topic 名称是否就是 /a/* 前缀（来自 dcl_fast_lio_mid360.rviz）
-SLAM_TOPIC_MAP = "/a/Laser_map"          # PointCloud2 — 累积地图
-SLAM_TOPIC_SCAN = "/a/cloud_registered"  # PointCloud2 — 当前帧 registered 点云
-SLAM_TOPIC_ODOM = "/a/Odometry"          # nav_msgs/Odometry — 当前位姿
-SLAM_TOPIC_PATH = "/a/path"              # nav_msgs/Path — 历史轨迹
+# 来自 rviz 配置 (drone_0 多机命名)
+SLAM_TOPIC_MAP = "/a/Laser_map"                    # PointCloud2 — 累积地图
+SLAM_TOPIC_SCAN = "/a/drone_0_cloud_registered"    # PointCloud2 — 当前帧 registered 点云
+SLAM_TOPIC_ODOM = "/a/drone_0_Odometry"            # nav_msgs/Odometry — 当前位姿
+SLAM_TOPIC_PATH = "/a/path"                        # nav_msgs/Path — 历史轨迹
 
 # ===================== 坐标系 =====================
-# TODO(slam-team): 确认 FAST-LIO 的 fixed_frame 是 camera_init 还是 map
-SLAM_FIXED_FRAME = "camera_init"
+# Fixed Frame 从 rviz 配置读出
+SLAM_FIXED_FRAME = "a/camera_init"
 
 # ===================== 降采样参数 =====================
-SLAM_MAP_VOXEL_SIZE = 0.05   # 累积地图：5cm
-SLAM_SCAN_VOXEL_SIZE = 0.10  # 实时 scan：10cm
+SLAM_MAP_VOXEL_SIZE = 0.03   # 累积地图：3cm
+SLAM_SCAN_VOXEL_SIZE = 0.05  # 实时 scan：5cm
 
 # ===================== 推送频率 (Hz) =====================
 # 实际由 ROS topic 自然驱动；这些是节流上限

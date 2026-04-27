@@ -1,3 +1,11 @@
+"""
+小智设备激活器（遗留，默认不启用）。
+
+仅在 `--protocol websocket` / `--protocol mqtt` 走激活流程时被使用。
+本项目默认 `--protocol local`，不会触达。
+保留是为了备用。
+"""
+
 import asyncio
 import json
 from typing import Optional

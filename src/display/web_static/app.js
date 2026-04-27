@@ -26,6 +26,29 @@
   const btnMode      = $('#btn-mode');
   const btnSend      = $('#btn-send');
   const textInput    = $('#text-input');
+  const btnFullscreen = $('#btn-fullscreen');
+
+  // ===================== 全屏 =====================
+  // 华为浏览器/微信内置浏览器都不认 PWA display:fullscreen，
+  // 提供一个手动全屏按钮，用 Fullscreen API 临时藏掉地址栏。
+  if (btnFullscreen) {
+    btnFullscreen.addEventListener('click', async () => {
+      const root = document.documentElement;
+      const isFs = document.fullscreenElement || document.webkitFullscreenElement;
+      try {
+        if (isFs) {
+          if (document.exitFullscreen) await document.exitFullscreen();
+          else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        } else {
+          if (root.requestFullscreen) await root.requestFullscreen();
+          else if (root.webkitRequestFullscreen) root.webkitRequestFullscreen();
+          else alert('当前浏览器不支持全屏 API，建议改用 Chrome');
+        }
+      } catch (e) {
+        console.warn('全屏切换失败:', e);
+      }
+    });
+  }
 
   // ===================== 状态 =====================
   let ws = null;

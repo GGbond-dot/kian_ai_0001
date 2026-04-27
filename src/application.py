@@ -89,7 +89,7 @@ class Application:
     # -------------------------
     # 生命周期
     # -------------------------
-    async def run(self, *, protocol: str = "websocket", mode: str = "gui") -> int:
+    async def run(self, *, protocol: str = "local", mode: str = "gui") -> int:
         logger.info("启动Application，protocol=%s", protocol)
         try:
             self.running = True
@@ -181,13 +181,19 @@ class Application:
 
     def _set_protocol(self, protocol_type: str) -> None:
         logger.debug("设置协议类型: %s", protocol_type)
-        if protocol_type == "mqtt":
-            self.protocol = MqttProtocol(asyncio.get_running_loop())
-        elif protocol_type == "local":
+        if protocol_type == "local":
             from src.protocols.local_agent_protocol import LocalAgentProtocol
             self.protocol = LocalAgentProtocol()
-        else:
+        elif protocol_type == "mqtt":
+            logger.warning("使用小智 MQTT 协议（遗留）。本项目默认走 local，仅在确实要连小智时才用 mqtt。")
+            self.protocol = MqttProtocol(asyncio.get_running_loop())
+        elif protocol_type == "websocket":
+            logger.warning("使用小智 WebSocket 协议（遗留）。本项目默认走 local，仅在确实要连小智时才用 websocket。")
             self.protocol = WebsocketProtocol()
+        else:
+            logger.error("未知协议: %s，回退到 local", protocol_type)
+            from src.protocols.local_agent_protocol import LocalAgentProtocol
+            self.protocol = LocalAgentProtocol()
 
     # -------------------------
     # 手动聆听（按住说话）

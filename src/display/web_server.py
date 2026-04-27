@@ -78,6 +78,25 @@ class WebServer:
         # 静态文件
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+        # PWA: manifest 和 service worker 必须挂在根路径
+        # SW 的 scope 受文件 URL 限制，挂 /sw.js 才能控制整站；manifest 同理放根更稳
+        @app.get("/manifest.json")
+        async def manifest():
+            return FileResponse(
+                str(STATIC_DIR / "manifest.json"),
+                media_type="application/manifest+json",
+            )
+
+        @app.get("/sw.js")
+        async def service_worker():
+            response = FileResponse(
+                str(STATIC_DIR / "sw.js"),
+                media_type="application/javascript",
+            )
+            # SW 文件本身不能被缓存，否则更新不及时
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return response
+
         # 表情资源
         @app.get("/emojis/{filename}")
         async def emoji_file(filename: str):
