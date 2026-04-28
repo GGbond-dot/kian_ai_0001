@@ -12,7 +12,8 @@ LocalAgentProtocol - 完全本地化的 AI Agent 协议实现
 import asyncio
 import json
 import re
-from typing import List, Optional
+import time
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -71,6 +72,16 @@ class LocalAgentProtocol(Protocol):
         self._is_listening: bool = False
         self._opus_buffer: List[bytes] = []
         self._listen_mode: str = "manual"
+
+        # 外部 PCM 输入通道（例如平板 WebView 推过来的 16kHz/16bit/单声道 PCM）
+        # 与 _opus_buffer 互斥使用：本轮谁有数据走谁
+        self._external_pcm_chunks: List[bytes] = []
+
+        # TTS 远端输出（平板播放）
+        # _tts_remote_sink: async (mp3_bytes) -> int  返回成功推送的客户端数
+        # _tts_remote_has_listeners: () -> bool       是否有平板正连着
+        self._tts_remote_sink: Optional[Callable] = None
+        self._tts_remote_has_listeners: Optional[Callable] = None
 
         # 正在进行的 pipeline 任务（用于取消）
         self._pipeline_task: Optional[asyncio.Task] = None
@@ -240,7 +251,9 @@ class LocalAgentProtocol(Protocol):
             logger.info("LocalAgentProtocol：结束录音，原因=%s", trigger)
             self._is_listening = False
             frames = list(self._opus_buffer)
+            pcm_chunks = list(self._external_pcm_chunks)
             self._opus_buffer.clear()
+            self._external_pcm_chunks.clear()
             self._reset_listen_tracking()
 
             current_task = asyncio.current_task()
@@ -259,7 +272,17 @@ class LocalAgentProtocol(Protocol):
             if self._pipeline_task and not self._pipeline_task.done():
                 self._pipeline_task.cancel()
 
-            if frames:
+            # 优先用外部 PCM（平板等远端麦克风），其次本地 Opus 帧
+            if pcm_chunks:
+                pcm_total = b"".join(pcm_chunks)
+                logger.info(
+                    "LocalAgentProtocol：使用外部 PCM 走 STT，字节=%d", len(pcm_total)
+                )
+                self._pipeline_task = asyncio.create_task(
+                    self._run_agent_pipeline_pcm(pcm_total),
+                    name="local-agent-pipeline-pcm",
+                )
+            elif frames:
                 self._pipeline_task = asyncio.create_task(
                     self._run_agent_pipeline(frames),
                     name="local-agent-pipeline",
@@ -400,6 +423,26 @@ class LocalAgentProtocol(Protocol):
             self._opus_buffer.append(data)
             self._process_auto_stop_frame(data)
 
+    def set_tts_remote_sink(self, sink: Callable, has_listeners: Callable) -> None:
+        """注册平板 TTS 输出通道。
+
+        sink: async (mp3_bytes) -> int  返回成功推送的客户端数
+        has_listeners: () -> bool       是否有客户端连着
+        """
+        self._tts_remote_sink = sink
+        self._tts_remote_has_listeners = has_listeners
+
+    def feed_external_pcm(self, pcm_bytes: bytes) -> None:
+        """
+        接收外部 PCM 输入（16kHz / 16-bit / 单声道）。
+
+        来源例如平板 WebView 通过 /ws/audio_in 推上来的原生录音流。
+        仅在 _is_listening 为 True 时缓冲；松开按钮时由 _finish_listening
+        优先消费此 buffer 走 STT，跳过 Opus 编解码。
+        """
+        if self._is_listening and pcm_bytes:
+            self._external_pcm_chunks.append(pcm_bytes)
+
     async def send_text(self, message: str):
         """
         拦截应用层发送的协议消息，路由本地行为。
@@ -422,6 +465,7 @@ class LocalAgentProtocol(Protocol):
                 self._listen_mode = str(data.get("mode") or "manual")
                 self._is_listening = True
                 self._opus_buffer.clear()
+                self._external_pcm_chunks.clear()
                 self._reset_listen_tracking()
 
             elif state == "stop":
@@ -526,6 +570,55 @@ class LocalAgentProtocol(Protocol):
         text = _re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
+    def _split_for_tts(self, text: str, max_len: int = 40) -> List[str]:
+        """
+        把回复切成短句以便边合成边推流。
+        先按强终止符 (。！？!?；;\n) 切；过长的段再按 (，,、) 二次切。
+        """
+        import re
+        parts: List[str] = []
+        for chunk in re.split(r'(?<=[。！？!?；;\n])', text):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            if len(chunk) <= max_len:
+                parts.append(chunk)
+                continue
+            for sub in re.split(r'(?<=[，,、])', chunk):
+                sub = sub.strip()
+                if sub:
+                    parts.append(sub)
+        return parts or ([text.strip()] if text.strip() else [])
+
+    async def _synthesize_mp3_for_remote(self, text: str) -> bytes:
+        """合成完整 mp3 字节用于推到平板播放。当前用 edge-tts。"""
+        mp3, _ = await self._synthesize_mp3_for_remote_timed(text)
+        return mp3
+
+    async def _synthesize_mp3_for_remote_timed(self, text: str):
+        """带耗时埋点的远端 mp3 合成。返回 (mp3_bytes, 首个 audio 块到达耗时_ms)。"""
+        import edge_tts
+        from src.utils.config_manager import ConfigManager
+
+        config = ConfigManager.get_instance()
+        voice = config.get_config("TTS.voice", "zh-CN-XiaoxiaoNeural")
+        rate = config.get_config("TTS.rate", "+0%")
+
+        chunks: List[bytes] = []
+        first_chunk_ms = -1.0
+        t0 = time.perf_counter()
+        try:
+            communicate = edge_tts.Communicate(text, voice, rate=rate)
+            async for chunk in communicate.stream():
+                if chunk.get("type") == "audio" and chunk.get("data"):
+                    if first_chunk_ms < 0:
+                        first_chunk_ms = (time.perf_counter() - t0) * 1000
+                    chunks.append(chunk["data"])
+        except Exception as e:
+            logger.warning("[TTS/remote] edge-tts 合成失败: %s", e)
+            return b"", first_chunk_ms
+        return b"".join(chunks), first_chunk_ms
+
     async def _play_tts_pulseaudio(self, text: str):
         """通过 edge-tts 流式生成音频并实时喂给 paplay，减少首字节延迟。"""
         import edge_tts
@@ -588,12 +681,15 @@ class LocalAgentProtocol(Protocol):
                     pass
 
         try:
+            logger.info("[TTS/paplay] 启动 edge-tts → ffmpeg → paplay 管道")
             # 并行：edge-tts→ffmpeg 和 ffmpeg→paplay
             await asyncio.gather(
                 _feed_mp3_to_ffmpeg(),
                 _pipe_pcm_to_paplay(),
             )
+            logger.info("[TTS/paplay] 数据流完成，等待 paplay 退出")
             await paplay.wait()
+            logger.info("[TTS/paplay] paplay 已退出, returncode=%s", paplay.returncode)
         except Exception as e:
             logger.warning(f"[TTS/paplay] 流式播放失败：{e}")
         finally:
@@ -647,6 +743,67 @@ class LocalAgentProtocol(Protocol):
             logger.error(f"文字 pipeline 异常：{e}", exc_info=True)
             self._fire_json({"type": "tts", "state": "stop"})
 
+    async def _run_agent_pipeline_after_stt(self, user_text: str) -> None:
+        """STT 完成之后的公共部分：LLM → TTS。两个 pipeline 入口共用。"""
+        if not user_text:
+            logger.info("STT 未识别到有效内容，流水线终止")
+            self._fire_json({"type": "stt", "state": "stop", "text": ""})
+            self._fire_json({"type": "tts", "state": "stop"})
+            return
+
+        self._fire_json({"type": "stt", "state": "stop", "text": user_text})
+        logger.info(f"STT 结果：'{user_text}'")
+
+        self._fire_json({"type": "tts", "state": "start"})
+
+        mcp_server = self._get_mcp_server()
+        tools = (
+            None
+            if self._should_skip_tools_for_text(user_text)
+            else mcp_server.get_openai_tools()
+        )
+        agent = self._get_agent()
+
+        reply = await agent.run(
+            user_input=user_text,
+            tools=tools if tools else None,
+            tool_executor=mcp_server.execute_tool,
+        )
+
+        if not reply:
+            reply = "（无回复）"
+        logger.info(f"LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
+
+        self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
+
+        await self._play_tts_any(reply)
+
+        self._fire_json({"type": "tts", "state": "stop"})
+        logger.info("Agent 流水线完成")
+
+    async def _run_agent_pipeline_pcm(self, pcm_bytes: bytes):
+        """外部 PCM 输入版本：跳过 Opus 解码，直接走 STT。"""
+        try:
+            self._fire_json({"type": "stt", "state": "start"})
+            stt = self._get_stt()
+            transcribe_pcm = getattr(stt, "transcribe_pcm", None)
+            if transcribe_pcm is None:
+                logger.warning(
+                    "当前 STT provider 不支持 transcribe_pcm，回退跳过外部 PCM"
+                )
+                self._fire_json({"type": "stt", "state": "stop", "text": ""})
+                self._fire_json({"type": "tts", "state": "stop"})
+                return
+            user_text = await transcribe_pcm(pcm_bytes)
+            await self._run_agent_pipeline_after_stt(user_text)
+        except asyncio.CancelledError:
+            logger.info("Agent 流水线(PCM) 被取消")
+            self._fire_json({"type": "tts", "state": "stop"})
+            raise
+        except Exception as e:
+            logger.error(f"Agent 流水线(PCM) 异常：{e}", exc_info=True)
+            self._fire_json({"type": "tts", "state": "stop"})
+
     async def _run_agent_pipeline(self, opus_frames: List[bytes]):
         """
         完整的 STT → LLM → TTS 流水线。
@@ -659,45 +816,7 @@ class LocalAgentProtocol(Protocol):
 
             stt = self._get_stt()
             user_text = await stt.transcribe(opus_frames)
-
-            if not user_text:
-                logger.info("STT 未识别到有效内容，流水线终止")
-                self._fire_json({"type": "stt", "state": "stop", "text": ""})
-                self._fire_json({"type": "tts", "state": "stop"})
-                return
-
-            self._fire_json({"type": "stt", "state": "stop", "text": user_text})
-            logger.info(f"STT 结果：'{user_text}'")
-
-            # ── 2. 切换到 SPEAKING 状态 ───────────────────────────
-            self._fire_json({"type": "tts", "state": "start"})
-
-            # ── 3. LLM Agent 推理 ─────────────────────────────────
-            mcp_server = self._get_mcp_server()
-            tools = None if self._should_skip_tools_for_text(user_text) else mcp_server.get_openai_tools()
-            agent = self._get_agent()
-
-            reply = await agent.run(
-                user_input=user_text,
-                tools=tools if tools else None,
-                tool_executor=mcp_server.execute_tool,
-            )
-
-            if not reply:
-                reply = "（无回复）"
-            logger.info(f"LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
-
-            # 发送 LLM 文字到 UI
-            self._fire_json(
-                {"type": "tts", "state": "sentence_start", "text": reply}
-            )
-
-            # ── 4. TTS：AudioCodec 路径 → paplay 路径 → 仅显示文字 ──
-            await self._play_tts_any(reply)
-
-            # ── 5. 通知播放结束 ───────────────────────────────────
-            self._fire_json({"type": "tts", "state": "stop"})
-            logger.info("Agent 流水线完成")
+            await self._run_agent_pipeline_after_stt(user_text)
 
         except asyncio.CancelledError:
             logger.info("Agent 流水线被取消")
@@ -731,19 +850,71 @@ class LocalAgentProtocol(Protocol):
           2. AudioCodec Opus 链路（原生声卡，回退）
           3. 仅显示文字（无任何音频设备）
         """
+        logger.info("[TTS] _play_tts_any 入口, 原始长度=%d", len(text))
         # 清理不适合朗读的内容（emoji、markdown 等）
         text = self._clean_text_for_tts(text)
+        logger.info("[TTS] 清理后长度=%d", len(text))
         if not text:
             logger.info("[TTS] 清理后无可朗读文本，跳过播放")
             return
 
+        provider = self._get_tts_provider_name()
+        logger.info("[TTS] provider=%s", provider)
+
+        # 级别 0：推到平板（如果有平板连着 /ws/audio_out）
+        if (
+            self._tts_remote_sink is not None
+            and self._tts_remote_has_listeners is not None
+            and self._tts_remote_has_listeners()
+        ):
+            try:
+                t0 = time.perf_counter()
+                logger.info("[TTS] 检测到平板已连接，走远端推流路径(句级流式) t0=%.3f", t0)
+                segments = self._split_for_tts(text)
+                logger.info("[TTS/remote] 切成 %d 段, 切分耗时=%.0fms 内容=%s",
+                            len(segments), (time.perf_counter() - t0) * 1000,
+                            [s[:10] + ('…' if len(s) > 10 else '') for s in segments])
+                pushed_any = False
+                first_audible_ms = None
+                for idx, seg in enumerate(segments):
+                    seg_t0 = time.perf_counter()
+                    mp3, first_chunk_ms = await self._synthesize_mp3_for_remote_timed(seg)
+                    syn_ms = (time.perf_counter() - seg_t0) * 1000
+                    if not mp3:
+                        logger.warning("[TTS/remote] 段 %d 合成为空, 字数=%d, 耗时=%.0fms, 跳过",
+                                       idx, len(seg), syn_ms)
+                        continue
+                    push_t0 = time.perf_counter()
+                    n = await self._tts_remote_sink(mp3)
+                    push_ms = (time.perf_counter() - push_t0) * 1000
+                    total_ms = (time.perf_counter() - t0) * 1000
+                    if first_audible_ms is None:
+                        first_audible_ms = total_ms
+                    logger.info(
+                        "[TTS/remote] 段 %d ok 字数=%d 首块=%.0fms 合成总=%.0fms "
+                        "推送=%.0fms 累计=%.0fms mp3=%dB 客户端=%d",
+                        idx, len(seg), first_chunk_ms, syn_ms, push_ms, total_ms,
+                        len(mp3), n,
+                    )
+                    pushed_any = True
+                if pushed_any:
+                    logger.info("[TTS/remote] 完成: 首段可听=%.0fms 总耗时=%.0fms 段数=%d",
+                                first_audible_ms or -1,
+                                (time.perf_counter() - t0) * 1000, len(segments))
+                    return
+                logger.warning("[TTS] 远端所有分段合成均为空，回退本地播放")
+            except Exception as e:
+                logger.warning(f"[TTS] 远端推流失败，回退本地: {e}")
+
         # 级别 1：PulseAudio paplay（仅 edge-tts 快捷路径）
-        if self._get_tts_provider_name() in {"edge", "edge_tts", "edge-tts"}:
+        if provider in {"edge", "edge_tts", "edge-tts"}:
             try:
                 import subprocess
 
                 r = subprocess.run(["pactl", "info"], capture_output=True, timeout=2)
+                logger.info("[TTS] pactl returncode=%d", r.returncode)
                 if r.returncode == 0:
+                    logger.info("[TTS] 走 PulseAudio 路径，开始合成")
                     await self._play_tts_pulseaudio(text)
                     logger.info("[TTS] PulseAudio 播放完成")
                     return

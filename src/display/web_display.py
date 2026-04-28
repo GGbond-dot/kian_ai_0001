@@ -36,6 +36,19 @@ class WebDisplay(BaseDisplay):
         # 注册控制指令处理
         self.server.set_command_callback(self._handle_command)
 
+    def set_audio_in_callback(self, callback: Callable) -> None:
+        """注册外部 PCM 流回调（来自平板 WebView 的 /ws/audio_in）。
+
+        callback 签名: async (pcm_bytes: bytes, meta: dict) -> None
+        """
+        self.server.set_audio_in_callback(callback)
+
+    def has_audio_out_listeners(self) -> bool:
+        return self.server.has_audio_out_listeners()
+
+    async def broadcast_audio_out(self, mp3_bytes: bytes) -> int:
+        return await self.server.broadcast_audio_out(mp3_bytes)
+
     async def set_callbacks(
         self,
         press_callback: Optional[Callable] = None,

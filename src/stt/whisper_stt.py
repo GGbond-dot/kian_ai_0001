@@ -134,34 +134,53 @@ class WhisperSTT:
         try:
             self._load_model()
             audio = self._opus_frames_to_float32(opus_frames)
-
-            if len(audio) < 1600:  # 少于 0.1 秒，直接返回空
-                logger.debug("音频过短，跳过转写")
-                return ""
-
-            vad_params = {}
-            if self._vad_filter:
-                vad_params = {
-                    "vad_filter": True,
-                    "vad_parameters": {
-                        "min_silence_duration_ms": self._vad_min_silence_ms
-                    },
-                }
-
-            segments, info = self._model.transcribe(
-                audio,
-                language=self._language if self._language else None,
-                beam_size=self._beam_size,
-                **vad_params,
-            )
-
-            text_parts = [seg.text.strip() for seg in segments]
-            result = "".join(text_parts).strip()
-            logger.info(f"STT 转写结果：'{result}'（语言={info.language}）")
-            return result
-
+            return self._transcribe_float32(audio)
         except Exception as e:
             logger.error(f"STT 转写失败：{e}", exc_info=True)
+            return ""
+
+    def _transcribe_float32(self, audio: np.ndarray) -> str:
+        """共享的 float32 → 文字 推理路径。"""
+        if len(audio) < 1600:  # 少于 0.1 秒，直接返回空
+            logger.debug("音频过短，跳过转写")
+            return ""
+
+        vad_params = {}
+        if self._vad_filter:
+            vad_params = {
+                "vad_filter": True,
+                "vad_parameters": {
+                    "min_silence_duration_ms": self._vad_min_silence_ms
+                },
+            }
+
+        segments, info = self._model.transcribe(
+            audio,
+            language=self._language if self._language else None,
+            beam_size=self._beam_size,
+            **vad_params,
+        )
+
+        text_parts = [seg.text.strip() for seg in segments]
+        result = "".join(text_parts).strip()
+        logger.info(f"STT 转写结果：'{result}'（语言={info.language}）")
+        return result
+
+    async def transcribe_pcm(self, pcm_bytes: bytes) -> str:
+        """直接吃 16kHz / 16-bit / 单声道 PCM bytes，跳过 Opus 解码。"""
+        if not pcm_bytes:
+            return ""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_transcribe_pcm, pcm_bytes)
+
+    def _sync_transcribe_pcm(self, pcm_bytes: bytes) -> str:
+        try:
+            self._load_model()
+            int16_array = np.frombuffer(pcm_bytes, dtype=np.int16)
+            audio = int16_array.astype(np.float32) / 32768.0
+            return self._transcribe_float32(audio)
+        except Exception as e:
+            logger.error(f"STT(PCM) 转写失败：{e}", exc_info=True)
             return ""
 
     def preload(self):
