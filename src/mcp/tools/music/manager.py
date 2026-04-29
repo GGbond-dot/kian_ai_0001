@@ -40,25 +40,13 @@ class MusicToolsManager:
                 add_tool, PropertyList, Property, PropertyType
             )
 
-            # 注册暂停工具
+            # 注册暂停 / 恢复 / 停止工具
             self._register_pause_tool(add_tool, PropertyList)
-
-            # 注册恢复工具
             self._register_resume_tool(add_tool, PropertyList)
-
-            # 注册停止工具
             self._register_stop_tool(add_tool, PropertyList)
 
-            # 注册跳转工具
-            self._register_seek_tool(add_tool, PropertyList, Property, PropertyType)
-
-            # 注册获取歌词工具
-            self._register_get_lyrics_tool(add_tool, PropertyList)
-
-            # 注册获取本地歌单工具
-            self._register_get_local_playlist_tool(
-                add_tool, PropertyList, Property, PropertyType
-            )
+            # seek / get_lyrics / get_local_playlist：精简 LLM 工具列表，
+            # 嵌入式平板场景下不向 LLM 暴露这些细控制。原实现保留备用。
 
             self._initialized = True
             logger.info("[MusicManager] 音乐工具注册完成")
@@ -84,9 +72,7 @@ class MusicToolsManager:
         add_tool(
             (
                 "music_player.search_and_play",
-                "搜索并播放指定的歌曲。根据歌名在线搜索歌曲并自动开始播放。"
-                "如果已有音乐在播放，会自动停止当前音乐并播放新歌曲。"
-                "用于播放用户请求的特定歌曲，例如'播放周杰伦的稻香'、'听一下孤勇者'。",
+                "在线搜歌并播放。用户说「播放/听一下/来一首XXX」时调用，会自动停止当前歌。",
                 search_props,
                 search_and_play_wrapper,
             )
@@ -105,10 +91,8 @@ class MusicToolsManager:
         add_tool(
             (
                 "music_player.pause",
-                "暂停当前正在播放的音乐。调用此工具会立即停止音乐播放，保持当前位置。"
-                "用户可以稍后调用 resume 恢复播放。"
-                "注意：不要在 TTS 说话时主动调用此工具，TTS 会自动临时暂停音乐。"
-                "只有当用户明确说'暂停'、'暂停音乐'、'先停一下'等时才调用。",
+                "暂停当前音乐（保持位置）。仅在用户明确说「暂停/先停一下」时调用；"
+                "TTS 说话期间会自动让位，不要主动调用。",
                 PropertyList(),
                 pause_wrapper,
             )
@@ -127,9 +111,7 @@ class MusicToolsManager:
         add_tool(
             (
                 "music_player.resume",
-                "恢复播放之前暂停的音乐。从暂停的位置继续播放。"
-                "只有当音乐处于'已暂停'状态（用户主动暂停）时才调用此工具。"
-                "如果音乐只是被 TTS 临时打断，TTS 结束后会自动恢复，无需调用此工具。",
+                "恢复用户主动暂停的音乐。TTS 临时打断的会自动恢复，不要重复调用。",
                 PropertyList(),
                 resume_wrapper,
             )
@@ -148,9 +130,7 @@ class MusicToolsManager:
         add_tool(
             (
                 "music_player.stop",
-                "完全停止音乐播放。停止当前歌曲并重置播放位置到开头。"
-                "与 pause（暂停）的区别：stop 是完全结束播放，pause 是临时暂停。"
-                "用于用户说'停止音乐'、'关闭音乐'、'别放了'等明确要求结束播放的场景。",
+                "完全停止音乐（重置到开头）。用户说「停止/关掉/别放了」时调用。pause 只是临时暂停。",
                 PropertyList(),
                 stop_wrapper,
             )

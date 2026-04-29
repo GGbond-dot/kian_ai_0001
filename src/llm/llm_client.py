@@ -4,6 +4,8 @@ LLM Client 模块
 （如 Ollama、vLLM、llama.cpp server、DeepSeek、本地 OpenAI-compatible 服务等）。
 此文件无任何隐藏系统提示或注入逻辑，所有参数完全透明。
 """
+import json
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +13,38 @@ from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _rough_token_count(text: str) -> int:
+    """
+    粗估 token 数：经验值 qwen 系列约 3-3.5 字符/token（CJK 字符权重高于 ASCII 单词）。
+    用于诊断埋点，不是计费用，误差可接受。
+    """
+    if not text:
+        return 0
+    return max(1, len(text) // 3 + 1)
+
+
+def _estimate_messages_tokens(messages: Optional[List[Dict[str, Any]]]) -> int:
+    if not messages:
+        return 0
+    total = 0
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            total += _rough_token_count(content)
+        elif isinstance(content, list):
+            total += _rough_token_count(json.dumps(content, ensure_ascii=False))
+        for tc in (m.get("tool_calls") or []):
+            total += _rough_token_count(json.dumps(tc, ensure_ascii=False))
+        # role/key 开销极小，忽略
+    return total
+
+
+def _estimate_tools_tokens(tools: Optional[List[Dict[str, Any]]]) -> int:
+    if not tools:
+        return 0
+    return _rough_token_count(json.dumps(tools, ensure_ascii=False))
 
 
 @dataclass
@@ -51,16 +85,21 @@ class LLMClient:
     此类不做任何提示词注入或记忆操作。
     """
 
-    def __init__(self):
+    def __init__(self, config_section: str = "LLM"):
         config = ConfigManager.get_instance()
+        self._config_section = config_section
         self._base_url: str = config.get_config(
-            "LLM.base_url", "http://localhost:11434/v1"
+            f"{config_section}.base_url", "http://localhost:11434/v1"
         )
-        self._api_key: str = config.get_config("LLM.api_key", "ollama")
-        self._model: str = config.get_config("LLM.model", "qwen2.5:7b")
-        self._max_tokens: int = int(config.get_config("LLM.max_tokens", 2048))
-        self._temperature: float = float(config.get_config("LLM.temperature", 0.7))
+        self._api_key: str = config.get_config(f"{config_section}.api_key", "ollama")
+        self._model: str = config.get_config(f"{config_section}.model", "qwen2.5:7b")
+        self._max_tokens: int = int(config.get_config(f"{config_section}.max_tokens", 2048))
+        self._temperature: float = float(config.get_config(f"{config_section}.temperature", 0.7))
         self._client = None  # 懒加载
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     def _normalized_base_url(self) -> str:
         base_url = (self._base_url or "").strip().rstrip("/")
@@ -248,6 +287,7 @@ class LLMClient:
             openai.types.chat.ChatCompletion
         """
         if self.uses_responses_api():
+            # responses API 路径暂不支持流式（事件类型不同，需另行适配）
             if input_items is None:
                 input_items = self._messages_to_responses_input(messages or [])
             return await self._responses_completion(
@@ -269,12 +309,28 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
+        if stream:
+            kwargs["stream"] = True
 
-        logger.debug(
-            f"LLM 请求：model={self._model}, "
-            f"messages={len(messages)}, tools={len(tools) if tools else 0}"
+        # ── prompt 体量埋点 ──
+        msg_tok = _estimate_messages_tokens(messages)
+        tool_tok = _estimate_tools_tokens(tools)
+        n_tools = len(tools) if tools else 0
+        n_msgs = len(messages) if messages else 0
+        logger.info(
+            "[LLM/prompt] 估 token: msg=%d (%d 条) tool=%d (%d 个) total≈%d, model=%s, stream=%s",
+            msg_tok, n_msgs, tool_tok, n_tools, msg_tok + tool_tok, self._model, stream,
         )
 
-        # 旧逻辑保留给标准 OpenAI-compatible Chat Completions 端点。
+        # stream=True 时返回 openai.AsyncStream[ChatCompletionChunk]，调用方需 async for
+        # stream=False 时返回完整 ChatCompletion 对象
+        t0 = time.perf_counter()
         response = await client.chat.completions.create(**kwargs)
+        ttfb_ms = (time.perf_counter() - t0) * 1000
+        # stream=True 下：返回时已收到 HTTP headers，等于 TTFB（首字节）
+        # stream=False 下：返回时全部内容已收完
+        logger.info(
+            "[LLM/timing] POST→响应对象 %.0fms (stream=%s, total≈%d token)",
+            ttfb_ms, stream, msg_tok + tool_tok,
+        )
         return response

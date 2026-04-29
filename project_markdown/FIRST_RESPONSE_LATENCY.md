@@ -1,13 +1,27 @@
 # 平板语音交互 — 首响应时延分析与优化方案
 
 > **背景**：本项目采用**双设备开发模式** —— PC（Ubuntu 24.04）写代码，通过 `syncpi` 同步到开发板（Ubuntu 22.04）运行。所有性能数据均来自开发板实测，PC 上不跑项目代码（缺依赖）。  
-> **目标**：降低端到端**首响应时延**——从用户说完话到平板播放出第一声的间隔。  
-> **当前基线**：~5.9 s（含完整链路）。  
-> **本文性质**：方案讨论文档，不是设计定稿。回到开发板后按本文 P0 → P1 顺序改代码 + 验证。
+> **本文性质**：方案讨论文档，不是设计定稿。回到开发板后按各部分的优先级顺序改代码 + 验证。
 
 ---
 
-## 1. 当前链路 & 实测耗时
+# 两种首响应场景（互相正交，可独立优化）
+
+| 场景 | 触发样例 | 当前基线 | 主要瓶颈 | 优化方向 |
+|---|---|---|---|---|
+| **A. 一般对话** | "你叫什么名字？" | ~5.9 s | LLM 全包 + TTS 冷启动 | LLM 流式 + TTS 预热/换 provider |
+| **B. ROS 语音控制** | "起飞"、"降落"、"看地图" | ~5.9 s | LLM 完全多余 + ROS 进程冷启动 | 跳过 LLM + 常态化 ROS bridge |
+
+两个场景**不冲突**，分别有独立的 P0；最终改造可以并行做。
+
+---
+
+# Part A：一般对话首响应
+
+> **目标**：从用户说完话到平板播放出第一声的间隔。  
+> **当前基线**：~5.9 s。
+
+## A.1 当前链路 & 实测耗时
 
 参考日志：`2026-04-28 16:59:33–42` 一次完整对话（用户问"你的名字叫什么呢?"，LLM 回复 70 字）。
 
@@ -25,7 +39,7 @@
 
 ---
 
-## 2. 各环节根因（含代码定位）
+## A.2 各环节根因（含代码定位）
 
 ### 2.1 VAD 阈值偏保守
 - 位置：`src/stt/whisper_stt.py:33-36`
@@ -58,7 +72,7 @@
 
 ---
 
-## 3. 优化方案矩阵
+## A.3 优化方案矩阵
 
 按"首响应净收益 / 工作量"排序：
 
@@ -75,7 +89,7 @@
 
 ---
 
-## 4. P0 详细方案：LLM 流式 + 句级 TTS 触发 ⭐
+## A.4 P0 详细方案：LLM 流式 + 句级 TTS 触发 ⭐
 
 ### 4.1 改造后的链路时序
 
@@ -139,7 +153,7 @@
 
 ---
 
-## 5. P1/P2/P3 方案细节
+## A.5 P1/P2/P3 方案细节
 
 ### 5.1 P1-A edge-tts 预热
 - 在 `WebServer` 启动 / 第一个 audio_out 客户端连上时，后台跑一次 `edge_tts.Communicate("。", voice).stream()` 把 TLS 握手做掉
@@ -169,7 +183,7 @@
 
 ---
 
-## 6. 待开发板实测项
+## A.6 待开发板实测项
 
 回到开发板后第一批要测的（按 5 分钟级别可完成）：
 
@@ -181,10 +195,220 @@ P0（LLM 流式）改造前**不需要**实测准备，直接动 llm_client.py +
 
 ---
 
-## 7. 决策记录区（Decision Log）
+# Part B：ROS 语音控制首响应
 
-> 每次讨论确定/否定了什么方案，写在这里。新方案进 §3 表格。
+> **目标**：从用户说"起飞"/"降落"/"看地图"等固定命令到 ROS 节点真正收到 topic 的间隔。  
+> **当前基线**：~5.9 s（和场景 A 共享 STT/LLM/TTS 链路，但 LLM 那 2.3s 在这里完全是浪费）。  
+> **理论极限**：~0.7 s（VAD + STT + 直接发 ROS topic，不要 TTS 反馈）。
 
-- 2026-04-28：确认 LLM 当前完全非流式（`stream=False` 默认），首响应 ~5.9 s，瓶颈是 LLM 2.3 s + TTS 冷启动 2.4 s 串行。决定 P0 = LLM 流式 + 句级 TTS。
+## B.1 当前链路 & 实测耗时
+
+```
+说话 → VAD(500) → 上传(70) → STT(600) → LLM 推理(2260, 决定调 drone.takeoff)
+     → MCP 执行 drone_takeoff  
+     → subprocess.Popen 启动新 Python 进程（~1-1.5s 冷启动）
+        ├─ Python 启动 + import: ~200ms
+        ├─ import rclpy: ~300-500ms
+        └─ rclpy.init + Node + Publisher + topic discovery: ~500-800ms
+     → publish UInt8 到 /drone_command
+     → TTS 反馈"起飞指令已下达" → 平板出声
+```
+
+| # | 阶段 | 耗时 | 是否必要 |
+|---|---|---|---|
+| 1 | VAD | ~500 ms | 必要（信号边界） |
+| 2 | 上传 | ~70 ms | 必要 |
+| 3 | STT | ~600 ms | 必要（拿到"起飞"二字） |
+| 4 | **LLM 推理** | **~2260 ms** | **❌ 完全浪费** |
+| 5 | **subprocess + rclpy 冷启动** | **~1000-1500 ms** | **❌ 完全浪费** |
+| 6 | ROS publish | ~10 ms | 必要 |
+| 7 | TTS 反馈合成 | ~2400 ms | 可选（语音确认） |
+| | **端到端** | **~5.9 s** | |
+
+## B.2 各环节根因（含代码定位）
+
+### B.2.1 LLM 在固定命令上是纯浪费 ★ 主要瓶颈
+- 调用点：`src/protocols/local_agent_protocol.py:767` `await agent.run(...)`
+- 问题：所有 STT 结果都送 LLM 推理。但"起飞"/"降落"/"看地图"是**固定语义、固定参数**的命令——LLM 没有在做任何有价值的推理，只是把"起飞"两个字翻译成 `drone.takeoff()` 调用
+- LLM 那 2260 ms 的代价**完全没有信息增益**
+
+### B.2.2 ROS publisher 每次冷启动 ★ 次要瓶颈
+- 位置：`src/mcp/tools/robot_dispatch/tools.py:70-99` `_publish_int_fire_and_forget`
+- 实现：每次调用 `subprocess.Popen([ROS2_PYTHON, UINT8_PUBLISHER_SCRIPT, ...])`
+- 问题：每次起飞都重新 fork 一个 Python 进程，重新 `import rclpy`，重新 `rclpy.init() + create_node + create_publisher + topic discovery`
+- 主进程其实**已经在跑 ROS2 环境**（SLAM bridge 用 rclpy，见 `src/display/slam_bridge.py` 和 `src/utils/ros2_env.py`）——只是 publisher 没复用
+
+### B.2.3 工具描述里的关键词其实可以反向利用
+- `src/mcp/tools/robot_dispatch/manager.py:9` 里已经写了 `"开始起飞"｜"起飞"｜"系统启动"｜"执行任务"｜"出发"`——这些是给 LLM 看的提示词，**但同样的关键词集合可以直接给意图前置匹配器用**，免重写
+
+## B.3 优化方案矩阵
+
+| 优先级 | 方案 | 端到端预期 | 净收益 | 工作量 | 风险 |
+|---|---|---|---|---|---|
+| **P0** | 关键词意图直达（跳过 LLM） | 5.9 s → 1.7 s | **−4.2 s** | 中（半天-1 天） | 误触发风险（无人机） |
+| **P1** | 常态化 ROS Bridge（驻留 publisher） | 1.7 s → 0.7 s | −1.0 s | 中（半天） | 主进程崩溃影响范围扩大 |
+| P2 | 跳过 TTS 反馈（仅显示文字 / 极简提示音） | 进一步 −2 s | 视体验取舍 | 极小 | 用户感知不到执行 |
+
+**P0+P1 组合：5.9 s → 0.7 s**。
+
+## B.4 P0 详细方案：关键词意图直达 ⭐
+
+### B.4.1 改造后的链路
+
+```
+说话 → VAD → 上传 → STT 出文本
+              ↓
+              意图前置匹配器（关键词 / 边界正则）
+              ├─ 命中"起飞"  → 直接 await drone_takeoff()，跳过 LLM
+              ├─ 命中"降落"/"返航"  → 直接 await drone_land()
+              ├─ 命中"看地图"/"看建图"  → 直接 await mapping_view()
+              └─ 未命中或语义模糊  → 走原 LLM 流程
+              ↓
+              （命中分支）
+              短反馈："起飞指令已下达" → TTS（可选，或换轻量提示音）
+```
+
+### B.4.2 改造点
+
+#### A. 新增 `src/protocols/intent_matcher.py`
+```python
+# 简化示例
+INTENT_RULES = [
+    {
+        "tool": "drone_takeoff",
+        "keywords": ["起飞", "出发", "执行任务", "系统启动"],
+        "negation_block": ["不要", "别", "取消", "吗", "?", "？"],
+    },
+    {
+        "tool": "drone_land",
+        "keywords": ["降落", "返航", "回来"],
+        "args": {"emergency": "false"},
+        "negation_block": [...],
+    },
+    {
+        "tool": "drone_land",
+        "keywords": ["紧急降落", "立刻降落", "马上停"],
+        "args": {"emergency": "true"},
+    },
+    {
+        "tool": "mapping_view",
+        "keywords": ["看地图", "看建图", "打开 rviz", "显示地图"],
+    },
+]
+
+def match(text: str) -> Optional[tuple[str, dict]]:
+    """返回 (tool_name, args) 或 None"""
+    for rule in INTENT_RULES:
+        if any(neg in text for neg in rule.get("negation_block", [])):
+            continue
+        if any(kw in text for kw in rule["keywords"]):
+            return rule["tool"], rule.get("args", {})
+    return None
+```
+
+#### B. `local_agent_protocol.py` 在 `_run_agent_pipeline_after_stt` 入口加 fast path
+```python
+async def _run_agent_pipeline_after_stt(self, user_text: str) -> None:
+    if not user_text:
+        ...
+        return
+    self._fire_json({"type": "stt", "state": "stop", "text": user_text})
+    
+    # ── 意图前置匹配（fast path）──
+    intent = intent_matcher.match(user_text)
+    if intent is not None:
+        tool_name, args = intent
+        self._fire_json({"type": "tts", "state": "start"})
+        result = await self._get_mcp_server().execute_tool(tool_name, args)
+        # 异步把这次交互补回 conversation_history，保持上下文连续性
+        asyncio.create_task(
+            self._get_agent().remember_exchange(user_text, result)
+        )
+        await self._play_tts_any(result)
+        self._fire_json({"type": "tts", "state": "stop"})
+        return
+    
+    # ── 未命中 → 走 LLM 流程（现有逻辑）──
+    ...
+```
+
+`agent.py:330` `remember_exchange` 已经存在，正好用来异步补上下文。
+
+### B.4.3 风险与缓解
+
+| 风险 | 缓解 |
+|---|---|
+| "我不要起飞" 误触发 | `negation_block` 字典预先排除否定词、疑问词 |
+| "起飞机准备好了吗" 误触发 | 边界匹配：要求关键词前后是字符串边界或标点；或要求 STT 文本长度 ≤ 6 字（短命令优先） |
+| 关键词列表不完备 | 第一版从 `manager.py` 工具描述里抠关键词；后续从误判日志里加 |
+| 误触发后无法撤回（无人机起飞） | 高风险命令保留双段触发：第一次命中只播 TTS "请确认起飞"；2 秒内再说"确认"才真发 ROS topic。**但这就回到 LLM 速度水平** |
+| LLM 上下文断了 | `agent.remember_exchange` 异步追加；后续对话仍能引用"刚才你让无人机起飞了" |
+
+### B.4.4 设计取舍
+
+> 是否值得为安全引入二次确认？
+
+- **当前 fire-and-forget 模式下，单次直达更符合体验**（你都已经按住说"起飞"了，再让你确认一遍很奇怪）
+- **真正的安全网应该在硬件侧**（飞控自己有 RC override / 失联自动降落）
+- 软件这边可以加一个**冷却期**：1 秒内只允许触发一次同种命令，防止 STT 重复识别造成连发
+- 起飞这种最危险的，可以加配置开关 `INTENT_CONFIRM_TAKEOFF=true` 让有需要的场景启用二次确认
+
+## B.5 P1 详细方案：常态化 ROS Bridge
+
+### B.5.1 改造点
+
+#### A. 新增主进程驻留的 ROS publisher 单例
+```python
+# src/utils/ros_bridge.py（或扩展现有 ros2_env.py）
+class RosBridge:
+    _instance = None
+    def __init__(self):
+        import rclpy
+        from rclpy.node import Node
+        if not rclpy.ok():
+            rclpy.init()
+        self._node = Node("aiagent_ros_bridge")
+        self._publishers = {}  # topic → Publisher
+
+    def publish_uint8(self, topic: str, value: int):
+        from std_msgs.msg import UInt8
+        if topic not in self._publishers:
+            self._publishers[topic] = self._node.create_publisher(UInt8, topic, 10)
+        msg = UInt8(); msg.data = value
+        self._publishers[topic].publish(msg)
+```
+
+#### B. `tools.py:_publish_int_fire_and_forget` 改成调单例
+```python
+def _publish_int_fire_and_forget(topic: str, value: int) -> tuple[str, str]:
+    from src.utils.ros_bridge import get_ros_bridge
+    bridge = get_ros_bridge()
+    # 持续发 30s 改成异步循环 + 单例 publisher
+    asyncio.create_task(_repeat_publish(bridge, topic, value, duration=30))
+    return "dispatched", "via ros_bridge singleton"
+```
+
+### B.5.2 注意事项
+
+- 主进程已经初始化过 rclpy（SLAM 用），需要确认是否已有 Node 在 spin。如果有，复用其 executor；如果没有，启动一个 SingleThreadedExecutor 跑在独立线程
+- 老的 `UINT8_PUBLISHER_SCRIPT` 可以保留作为兜底，跑不起来的极端情况下 fallback 到 subprocess
+- topic 第一次 publish 还有 ROS2 自身的 discovery 延迟（~100ms），但一旦发现订阅者后续都是 <10ms
+
+## B.6 待开发板实测项（场景 B 专用）
+
+1. **subprocess 冷启动实测**：在 `_publish_int_fire_and_forget` 入口和首次 publish 之间打时间戳，确认 1-1.5s 估算是否准确
+2. **意图匹配误触发率**：跑 50 条日常对话 STT 文本过一遍 `intent_matcher.match`，看误命中率
+3. **rclpy 多节点共存**：确认 SLAM bridge 的 rclpy 节点和新增的 RosBridge 节点能在同一进程共存
+
+---
+
+# 共用：决策记录区（Decision Log）
+
+> 每次讨论确定/否定了什么方案，写在这里。新方案补到对应场景的方案矩阵。
+
+- 2026-04-28：确认 LLM 当前完全非流式（`stream=False` 默认），场景 A 首响应 ~5.9 s，瓶颈是 LLM 2.3 s + TTS 冷启动 2.4 s 串行。决定场景 A 的 P0 = LLM 流式 + 句级 TTS。
 - 2026-04-28：第二次 chat/completions 调用归因为 `_refresh_memory_summary` 后台任务，**确认不影响首响应**，结案。
 - 2026-04-28：qwen-tts 客户端只产出 Opus 帧不产出 mp3/wav，**不能即插即用替换 edge-tts 远端路径**，需先加 WAV 输出方法 + 实测首块延迟才能决策。
+- 2026-04-28：句级 TTS 切分按强标点（`。！？；～\n`）切，逗号不切——首句通常 5-15 字内有强标点，逗号收益 <100ms 不值得引入韵律损失。
+- 2026-04-28：识别出场景 B（ROS 语音控制）独立于场景 A，主要瓶颈是 LLM 那 2.3s 完全是浪费 + ROS publisher 每次 subprocess 冷启动 ~1-1.5s。决定场景 B 的 P0 = 关键词意图直达，P1 = 常态化 ROS Bridge。
+- 2026-04-28：场景 B 不引入二次确认作为默认行为（影响体验），高风险命令（起飞）通过 config 开关 `INTENT_CONFIRM_TAKEOFF` 选择性启用；硬件侧（飞控）应有 RC override / 失联自动降落作为安全网。

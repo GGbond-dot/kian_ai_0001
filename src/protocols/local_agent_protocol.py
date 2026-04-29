@@ -88,6 +88,9 @@ class LocalAgentProtocol(Protocol):
         self._auto_stop_task: Optional[asyncio.Task] = None
         self._stop_lock = asyncio.Lock()
 
+        # edge-tts 预热：和 LLM 推理并行做 TLS+WSS 握手
+        self._tts_warmup_task: Optional[asyncio.Task] = None
+
         # 懒加载的模块实例
         self._stt = None
         self._tts = None
@@ -535,7 +538,7 @@ class LocalAgentProtocol(Protocol):
 
     @staticmethod
     def _clean_text_for_tts(text: str) -> str:
-        """清理文本中不适合语音朗读的内容：emoji、markdown 标记等。"""
+        """清理文本中不适合语音朗读的内容：emoji、markdown 标记、装饰符号等。"""
         import re as _re
         # 移除 emoji 及其他特殊 Unicode 符号
         text = _re.sub(
@@ -556,7 +559,7 @@ class LocalAgentProtocol(Protocol):
             r"\U00003030\U0000303D"
             r"\U00003297\U00003299"
             r"]+", "", text)
-        # 移除 markdown 粗体/斜体标记
+        # 先剥 markdown 粗体/斜体（成对出现）
         text = _re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
         text = _re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", text)
         # 移除 markdown 标题标记
@@ -566,9 +569,77 @@ class LocalAgentProtocol(Protocol):
         # 移除 markdown 代码块标记
         text = _re.sub(r"```[^\n]*\n?", "", text)
         text = _re.sub(r"`([^`]+)`", r"\1", text)
+        # 兜底剥未配对的 markdown 强调标记 (流式按段切分时容易残留)
+        text = _re.sub(r"\*+", "", text)
+        text = _re.sub(r"_+", " ", text)
+        # 移除装饰性符号：全角波浪号、破折号、项目符号、几何图形、CJK 装饰等
+        text = _re.sub(
+            r"[‐-―"           # 各种 dash / em-dash / en-dash
+            r"•‣⁃∙" # bullet 类
+            r"■-◿"            # 几何形状（▪▫■□●○等）
+            r"★-☆"            # ★☆
+            r"〰〜～"       # 波浪号 ～〜
+            r"︰-﹏"            # CJK 兼容装饰
+            r"]+", "", text)
         # 移除多余空行
         text = _re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
+
+    def _take_complete_segment(
+        self, buffer: str, force_max_len: int = 60
+    ) -> Optional[tuple]:
+        """
+        从增长中的 token 缓冲里切出一个可以送 TTS 的完整段。
+
+        优先在强终止符（。！？!?；;\n）处切；
+        当缓冲超过 force_max_len 仍无强标点时，退而求其次在最近一个 (，,、) 处切；
+        都没有则返回 None，等更多 token。
+
+        返回 (segment, remaining_buffer) 或 None。
+        """
+        if not buffer:
+            return None
+        strong = "。！？!?；;\n"
+        for i, ch in enumerate(buffer):
+            if ch in strong:
+                return buffer[: i + 1], buffer[i + 1 :]
+        if len(buffer) >= force_max_len:
+            soft = "，,、 "
+            for i in range(len(buffer) - 1, -1, -1):
+                if buffer[i] in soft:
+                    return buffer[: i + 1], buffer[i + 1 :]
+            return buffer, ""
+        return None
+
+    async def _tts_sink_one_segment(self, seg: str) -> bool:
+        """
+        合成单段并推到远端 sink。返回是否成功推送。
+        """
+        seg = self._clean_text_for_tts(seg)
+        if not seg.strip():
+            return False
+        if self._tts_remote_sink is None or self._tts_remote_has_listeners is None:
+            return False
+        if not self._tts_remote_has_listeners():
+            return False
+        try:
+            t0 = time.perf_counter()
+            mp3, first_chunk_ms = await self._synthesize_mp3_for_remote_timed(seg)
+            syn_ms = (time.perf_counter() - t0) * 1000
+            if not mp3:
+                logger.warning("[TTS/stream] 段合成为空 字数=%d 耗时=%.0fms", len(seg), syn_ms)
+                return False
+            push_t0 = time.perf_counter()
+            n = await self._tts_remote_sink(mp3)
+            push_ms = (time.perf_counter() - push_t0) * 1000
+            logger.info(
+                "[TTS/stream] 段 ok 字数=%d 首块=%.0fms 合成=%.0fms 推送=%.0fms 客户端=%d",
+                len(seg), first_chunk_ms, syn_ms, push_ms, n,
+            )
+            return True
+        except Exception as e:
+            logger.warning("[TTS/stream] 段推送失败: %s", e)
+            return False
 
     def _split_for_tts(self, text: str, max_len: int = 40) -> List[str]:
         """
@@ -594,6 +665,47 @@ class LocalAgentProtocol(Protocol):
         """合成完整 mp3 字节用于推到平板播放。当前用 edge-tts。"""
         mp3, _ = await self._synthesize_mp3_for_remote_timed(text)
         return mp3
+
+    def _kick_edge_tts_warmup(self) -> None:
+        """
+        预热 edge-tts：异步起一次极短合成把 TLS+WSS 握手做掉。
+        和 LLM 推理并行，命中实际合成时连接是热的。
+        edge-tts 不复用底层连接，所以仅对接下来一小段时间内的首次合成有效。
+        """
+        provider = self._get_tts_provider_name()
+        if provider not in {"edge", "edge_tts", "edge-tts"}:
+            logger.info("[TTS/warmup] 跳过：provider=%s 非 edge", provider)
+            return
+        if self._tts_remote_has_listeners is None:
+            logger.info("[TTS/warmup] 跳过：has_listeners 回调未注册")
+            return
+        if not self._tts_remote_has_listeners():
+            logger.info("[TTS/warmup] 跳过：暂无平板监听")
+            return
+        if self._tts_warmup_task and not self._tts_warmup_task.done():
+            logger.info("[TTS/warmup] 跳过：已有预热任务在跑")
+            return
+
+        async def _warmup():
+            try:
+                import edge_tts
+                voice = self.config.get_config("TTS.voice", "zh-CN-XiaoxiaoNeural")
+                t0 = time.perf_counter()
+                # edge-tts 对纯标点会返回 "No audio received"，预热文本必须有可朗读字符
+                communicate = edge_tts.Communicate("嗯。", voice)
+                async for chunk in communicate.stream():
+                    if chunk.get("type") == "audio":
+                        break
+                logger.info("[TTS/warmup] edge-tts 预热完成 %.0fms",
+                            (time.perf_counter() - t0) * 1000)
+            except Exception as e:
+                logger.warning("[TTS/warmup] 预热失败: %s", e)
+
+        try:
+            self._tts_warmup_task = asyncio.create_task(_warmup(), name="edge-tts-warmup")
+            logger.info("[TTS/warmup] 已触发预热任务")
+        except RuntimeError as e:
+            logger.warning("[TTS/warmup] create_task 失败: %s", e)
 
     async def _synthesize_mp3_for_remote_timed(self, text: str):
         """带耗时埋点的远端 mp3 合成。返回 (mp3_bytes, 首个 audio 块到达耗时_ms)。"""
@@ -710,6 +822,9 @@ class LocalAgentProtocol(Protocol):
             self._fire_json({"type": "tts", "state": "start"})
             self._fire_json({"type": "stt", "state": "stop", "text": user_text})
 
+            # 与 LLM 推理并行预热 edge-tts
+            self._kick_edge_tts_warmup()
+
             mcp_server = self._get_mcp_server()
             tools = None if self._should_skip_tools_for_text(user_text) else mcp_server.get_openai_tools()
             agent = self._get_agent()
@@ -718,20 +833,26 @@ class LocalAgentProtocol(Protocol):
                 f"[Pipeline] 向 LLM 传入 {len(tools) if tools else 0} 个工具，用户输入='{user_text}'"
             )
 
-            reply = await agent.run(
-                user_input=user_text,
-                tools=tools if tools else None,
-                tool_executor=mcp_server.execute_tool,
-            )
-
-            if not reply:
-                reply = "（无回复）"
-
-            logger.info(f"LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
-            self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
-
-            # TTS：AudioCodec 路径 → paplay 路径 → 仅显示文字
-            await self._play_tts_any(reply)
+            if self._can_use_streaming_remote_tts():
+                reply = await self._consume_llm_stream_to_remote_tts(
+                    agent, user_text, tools, mcp_server.execute_tool
+                )
+                if not reply:
+                    reply = "（无回复）"
+                logger.info(f"LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
+                self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
+            else:
+                reply = await agent.run(
+                    user_input=user_text,
+                    tools=tools if tools else None,
+                    tool_executor=mcp_server.execute_tool,
+                )
+                if not reply:
+                    reply = "（无回复）"
+                logger.info(f"LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
+                self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
+                # TTS：AudioCodec 路径 → paplay 路径 → 仅显示文字
+                await self._play_tts_any(reply)
 
             self._fire_json({"type": "tts", "state": "stop"})
             logger.info("文字 pipeline 完成")
@@ -743,8 +864,18 @@ class LocalAgentProtocol(Protocol):
             logger.error(f"文字 pipeline 异常：{e}", exc_info=True)
             self._fire_json({"type": "tts", "state": "stop"})
 
+    def _can_use_streaming_remote_tts(self) -> bool:
+        """是否走流式 LLM + 句级远端 TTS 路径。"""
+        if self._tts_remote_sink is None or self._tts_remote_has_listeners is None:
+            return False
+        if not self._tts_remote_has_listeners():
+            return False
+        if self._get_tts_provider_name() not in {"edge", "edge_tts", "edge-tts"}:
+            return False
+        return True
+
     async def _run_agent_pipeline_after_stt(self, user_text: str) -> None:
-        """STT 完成之后的公共部分：LLM → TTS。两个 pipeline 入口共用。"""
+        """STT 完成之后的公共部分：三层路由 (Tier 0 关键词 → Tier 1 flash → Tier 2 fallback)。"""
         if not user_text:
             logger.info("STT 未识别到有效内容，流水线终止")
             self._fire_json({"type": "stt", "state": "stop", "text": ""})
@@ -756,6 +887,208 @@ class LocalAgentProtocol(Protocol):
 
         self._fire_json({"type": "tts", "state": "start"})
 
+        try:
+            # ── Tier 0：关键词意图直达，0 LLM ─────────────────
+            from src.protocols.intent_matcher import match_intent, match_tier2_direct
+
+            fast_path_enabled = bool(
+                self.config.get_config("ROUTER.fast_path_enabled", True)
+            )
+
+            if fast_path_enabled:
+                hit = match_intent(user_text)
+                if hit is not None:
+                    await self._run_tier0_intent(user_text, hit)
+                    return
+
+            # ── Tier 2 直达：高级语义关键词跳过 Tier 1 ────────
+            if fast_path_enabled and match_tier2_direct(user_text):
+                await self._run_tier2_full(user_text, reason="tier2-direct")
+                return
+
+            # ── Tier 1：qwen-flash 闲聊（无工具），失败回退 ───
+            if fast_path_enabled and self._can_use_streaming_remote_tts():
+                tier1_ok = await self._run_tier1_fast(user_text)
+                if tier1_ok:
+                    return
+                logger.info("[Tier1] 触发 fallback，转 Tier 2")
+
+            # ── Tier 2：qwen3-coder-next + 完整工具（兜底） ──
+            await self._run_tier2_full(user_text, reason="tier2-fallback-or-default")
+
+        finally:
+            self._fire_json({"type": "tts", "state": "stop"})
+            logger.info("Agent 流水线完成")
+
+    async def _run_tier0_intent(self, user_text: str, hit) -> None:
+        """Tier 0：命中关键词直接调 MCP 工具 + ack TTS + 异步补对话历史。"""
+        mcp_server = self._get_mcp_server()
+        agent = self._get_agent()
+
+        # 命令型：先 ack 再异步执行工具（用户先听到反馈）
+        # 查询型（ack="")：先执行工具拿结果再播报
+        if hit.ack:
+            self._fire_json({"type": "tts", "state": "sentence_start", "text": hit.ack})
+            self._kick_edge_tts_warmup()
+            await self._tts_sink_one_segment(hit.ack)
+
+            async def _exec_and_remember():
+                try:
+                    result = await mcp_server.execute_tool(hit.tool, hit.args)
+                    logger.info("[Tier0] 工具 %s 完成: %s", hit.tool, str(result)[:200])
+                except Exception as e:
+                    logger.error("[Tier0] 工具 %s 执行失败: %s", hit.tool, e, exc_info=True)
+                agent.remember_exchange(user_text, hit.ack)
+
+            asyncio.create_task(_exec_and_remember(), name=f"tier0-exec:{hit.tool}")
+        else:
+            # 查询型：等结果
+            try:
+                raw = await mcp_server.execute_tool(hit.tool, hit.args)
+                spoken = self._extract_tool_text(raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False))
+            except Exception as e:
+                logger.error("[Tier0] 查询工具 %s 失败: %s", hit.tool, e, exc_info=True)
+                spoken = "查询失败"
+            self._fire_json({"type": "tts", "state": "sentence_start", "text": spoken})
+            self._kick_edge_tts_warmup()
+            await self._tts_sink_one_segment(spoken)
+            agent.remember_exchange(user_text, spoken)
+
+    async def _run_tier1_fast(self, user_text: str) -> bool:
+        """
+        Tier 1：qwen-flash 直接对话，无 tools，无 agent ReAct 循环。
+        返回 True 表示完成（已推 TTS + 历史已写）；False 表示触发 fallback（未推任何 TTS）。
+        """
+        from src.llm.llm_client import LLMClient
+
+        # 复用单例 fast client
+        if not hasattr(self, "_llm_fast") or self._llm_fast is None:
+            try:
+                self._llm_fast = LLMClient(config_section="LLM_FAST")
+            except Exception as e:
+                logger.warning("[Tier1] LLM_FAST 客户端构造失败: %s，回退 Tier 2", e)
+                return False
+
+        agent = self._get_agent()
+        history = agent.get_history()
+        sys_prompt = self.config.get_config(
+            "LLM_FAST.system_prompt",
+            "你是物流终端机器人的语音助手，回答简短自然。"
+        )
+        messages = [{"role": "system", "content": sys_prompt}] + list(history) + [
+            {"role": "user", "content": user_text}
+        ]
+
+        fallback_phrases = self.config.get_config(
+            "ROUTER.fallback_phrases",
+            ["做不了", "没办法处理", "我不会"],
+        ) or []
+        scan_chars = int(self.config.get_config("ROUTER.fallback_scan_chars", 30))
+
+        # 与 LLM 推理并行预热 edge-tts
+        self._kick_edge_tts_warmup()
+
+        t0 = time.perf_counter()
+        try:
+            stream = await self._llm_fast.chat_completion(
+                messages=messages, tools=None, stream=True,
+            )
+        except Exception as e:
+            logger.warning("[Tier1] flash 请求失败 %s，回退 Tier 2", e)
+            return False
+
+        decided: Optional[str] = None  # None / "tier1" / "tier2"
+        scan_buf = ""
+        seg_buf = ""
+        full = []
+        first_seg_pushed_ms: Optional[float] = None
+
+        try:
+            async for chunk in stream:
+                if not getattr(chunk, "choices", None):
+                    continue
+                delta = chunk.choices[0].delta
+                token = getattr(delta, "content", None)
+                if not token:
+                    continue
+                full.append(token)
+
+                # 先做 fallback 探测
+                if decided is None:
+                    scan_buf += token
+                    hit_phrase = next((p for p in fallback_phrases if p in scan_buf), None)
+                    if hit_phrase:
+                        logger.info(
+                            "[Tier1] 命中 fallback 短语 %r (前 %d 字)，丢弃 flash 输出",
+                            hit_phrase, len(scan_buf),
+                        )
+                        try:
+                            await stream.aclose()
+                        except Exception:
+                            pass
+                        return False  # → Tier 2
+                    if len(scan_buf) >= scan_chars:
+                        decided = "tier1"
+                        seg_buf = scan_buf
+                        scan_buf = ""
+                else:
+                    seg_buf += token
+
+                # 已确认 tier1 → 按段切句推 TTS
+                if decided == "tier1":
+                    while True:
+                        cut = self._take_complete_segment(seg_buf)
+                        if cut is None:
+                            break
+                        seg, seg_buf = cut
+                        pushed = await self._tts_sink_one_segment(seg)
+                        if pushed and first_seg_pushed_ms is None:
+                            first_seg_pushed_ms = (time.perf_counter() - t0) * 1000
+                            logger.info(
+                                "[TTS/stream] 首段已推送 距 Tier1 起=%.0fms",
+                                first_seg_pushed_ms,
+                            )
+        except Exception as e:
+            logger.error("[Tier1] 流式异常: %s", e, exc_info=True)
+            # 流式中途出错：若已推 TTS，吃下；否则让 Tier 2 接
+            if decided != "tier1":
+                return False
+
+        # 流结束。如果 scan_buf 太短没决断，也算 tier1（极短回复，无 fallback 词）
+        if decided is None and scan_buf.strip():
+            decided = "tier1"
+            seg_buf = scan_buf
+
+        # 残余尾巴
+        if decided == "tier1" and seg_buf.strip():
+            pushed = await self._tts_sink_one_segment(seg_buf)
+            if pushed and first_seg_pushed_ms is None:
+                first_seg_pushed_ms = (time.perf_counter() - t0) * 1000
+                logger.info(
+                    "[TTS/stream] 首段(尾)已推送 距 Tier1 起=%.0fms",
+                    first_seg_pushed_ms,
+                )
+
+        reply = "".join(full).strip()
+        if not reply:
+            return False
+        logger.info(
+            "[Tier1] flash 完成 总耗时=%.0fms 字数=%d 回复='%s%s'",
+            (time.perf_counter() - t0) * 1000, len(reply),
+            reply[:80], "..." if len(reply) > 80 else "",
+        )
+        self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
+        # 历史补写（同步即可，写得起）
+        self._get_agent().remember_exchange(user_text, reply)
+        return True
+
+    async def _run_tier2_full(self, user_text: str, reason: str) -> None:
+        """Tier 2：原 coder-next + 完整 tools 路径。"""
+        logger.info("[Tier2] 触发原因=%s", reason)
+
+        # 与 LLM 推理并行预热 edge-tts
+        self._kick_edge_tts_warmup()
+
         mcp_server = self._get_mcp_server()
         tools = (
             None
@@ -764,22 +1097,69 @@ class LocalAgentProtocol(Protocol):
         )
         agent = self._get_agent()
 
-        reply = await agent.run(
-            user_input=user_text,
-            tools=tools if tools else None,
-            tool_executor=mcp_server.execute_tool,
-        )
+        if self._can_use_streaming_remote_tts():
+            reply = await self._consume_llm_stream_to_remote_tts(
+                agent, user_text, tools, mcp_server.execute_tool
+            )
+            if not reply:
+                reply = "（无回复）"
+            logger.info(f"[Tier2] LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
+            self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
+        else:
+            reply = await agent.run(
+                user_input=user_text,
+                tools=tools if tools else None,
+                tool_executor=mcp_server.execute_tool,
+            )
+            if not reply:
+                reply = "（无回复）"
+            logger.info(f"[Tier2] LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
+            self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
+            await self._play_tts_any(reply)
 
-        if not reply:
-            reply = "（无回复）"
-        logger.info(f"LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
-
-        self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
-
-        await self._play_tts_any(reply)
-
-        self._fire_json({"type": "tts", "state": "stop"})
-        logger.info("Agent 流水线完成")
+    async def _consume_llm_stream_to_remote_tts(
+        self,
+        agent,
+        user_text: str,
+        tools,
+        tool_executor,
+    ) -> str:
+        """
+        消费 agent.run_streaming 的 token 流，按强标点切句即时推 TTS。
+        返回完整 reply 文本（用于日志 / UI 渲染）。
+        """
+        t0 = time.perf_counter()
+        first_seg_ms: Optional[float] = None
+        full = []
+        buffer = ""
+        try:
+            async for token in agent.run_streaming(
+                user_input=user_text,
+                tools=tools if tools else None,
+                tool_executor=tool_executor,
+            ):
+                if not token:
+                    continue
+                full.append(token)
+                buffer += token
+                while True:
+                    cut = self._take_complete_segment(buffer)
+                    if cut is None:
+                        break
+                    seg, buffer = cut
+                    pushed = await self._tts_sink_one_segment(seg)
+                    if pushed and first_seg_ms is None:
+                        first_seg_ms = (time.perf_counter() - t0) * 1000
+                        logger.info("[TTS/stream] 首段已推送 距 LLM 起=%.0fms", first_seg_ms)
+            # 残余尾巴
+            if buffer.strip():
+                pushed = await self._tts_sink_one_segment(buffer)
+                if pushed and first_seg_ms is None:
+                    first_seg_ms = (time.perf_counter() - t0) * 1000
+                    logger.info("[TTS/stream] 首段(尾)已推送 距 LLM 起=%.0fms", first_seg_ms)
+        except Exception as e:
+            logger.error("[TTS/stream] 流式管线异常：%s", e, exc_info=True)
+        return "".join(full)
 
     async def _run_agent_pipeline_pcm(self, pcm_bytes: bytes):
         """外部 PCM 输入版本：跳过 Opus 解码，直接走 STT。"""

@@ -47,6 +47,19 @@ class CalendarPlugin(Plugin):
     async def setup(self, app: Any) -> None:
         self.app = app
         self._adapter = _AppAdapter(app)
+        # 日程功能通过 LLM.optional_tool_groups 总开关控制
+        try:
+            from src.utils.config_manager import ConfigManager
+            enabled = "calendar" in (
+                ConfigManager.get_instance().get_config(
+                    "LLM.optional_tool_groups", []
+                ) or []
+            )
+        except Exception:
+            enabled = False
+        if not enabled:
+            self._service = None
+            return
         try:
             from src.mcp.tools.calendar import get_reminder_service
 
