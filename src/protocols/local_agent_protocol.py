@@ -618,6 +618,10 @@ class LocalAgentProtocol(Protocol):
         seg = self._clean_text_for_tts(seg)
         if not seg.strip():
             return False
+        import re as _re
+        if not _re.search(r"[一-鿿0-9A-Za-z]", seg):
+            logger.info("[TTS/stream] 段无可朗读内容，跳过 seg=%r", seg)
+            return False
         if self._tts_remote_sink is None or self._tts_remote_has_listeners is None:
             return False
         if not self._tts_remote_has_listeners():
@@ -709,6 +713,18 @@ class LocalAgentProtocol(Protocol):
 
     async def _synthesize_mp3_for_remote_timed(self, text: str):
         """带耗时埋点的远端 mp3 合成。返回 (mp3_bytes, 首个 audio 块到达耗时_ms)。"""
+        provider = self._get_tts_provider_name()
+        if provider in {"qwen", "qwen_tts", "qwen-tts"}:
+            from src.tts.qwen_tts_client import QwenTTSClient
+            if not getattr(self, "_qwen_tts_client", None):
+                self._qwen_tts_client = QwenTTSClient()
+            try:
+                mp3, first_chunk_ms = await self._qwen_tts_client.synthesize_to_mp3(text)
+                return mp3, first_chunk_ms
+            except Exception as e:
+                logger.warning("[TTS/remote] qwen-tts 合成失败: %s", e)
+                return b"", -1.0
+
         import edge_tts
         from src.utils.config_manager import ConfigManager
 
@@ -870,7 +886,10 @@ class LocalAgentProtocol(Protocol):
             return False
         if not self._tts_remote_has_listeners():
             return False
-        if self._get_tts_provider_name() not in {"edge", "edge_tts", "edge-tts"}:
+        if self._get_tts_provider_name() not in {
+            "edge", "edge_tts", "edge-tts",
+            "qwen", "qwen_tts", "qwen-tts",
+        }:
             return False
         return True
 

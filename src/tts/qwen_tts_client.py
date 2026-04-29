@@ -6,7 +6,8 @@ import asyncio
 import base64
 import json
 import os
-from typing import List
+import time
+from typing import AsyncIterator, List, Tuple
 
 import httpx
 import numpy as np
@@ -170,6 +171,114 @@ class QwenTTSClient:
                         break
 
         return b"".join(pcm_chunks)
+
+    async def stream_pcm_chunks(
+        self, text: str
+    ) -> AsyncIterator[Tuple[bytes, float]]:
+        """
+        流式生成 24kHz s16le 单声道 PCM 块。
+        每次 yield (pcm_chunk, first_chunk_ms)；首块 first_chunk_ms 为实测延迟，后续块为 -1。
+        """
+        if not self._api_key:
+            raise RuntimeError(
+                "未配置 DashScope API Key，请设置 TTS.dashscope_api_key 或 DASHSCOPE_API_KEY"
+            )
+        url = f"{self._base_url}/services/aigc/multimodal-generation/generation"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "X-DashScope-SSE": "enable",
+        }
+        payload = {
+            "model": self._model,
+            "input": {
+                "text": text,
+                "voice": self._voice,
+                "language_type": self._language_type,
+            },
+        }
+        if self._instructions:
+            payload["input"]["instructions"] = self._instructions
+            payload["input"]["optimize_instructions"] = self._optimize_instructions
+
+        t0 = time.perf_counter()
+        first_logged = False
+        timeout = httpx.Timeout(60.0, connect=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    output = chunk.get("output") or {}
+                    audio = output.get("audio") or {}
+                    audio_data = audio.get("data")
+                    if audio_data:
+                        pcm = base64.b64decode(audio_data)
+                        if pcm:
+                            if not first_logged:
+                                ttfb_ms = (time.perf_counter() - t0) * 1000
+                                first_logged = True
+                                logger.info(
+                                    "[QwenTTS/stream] 首块到达 %.0fms text_len=%d",
+                                    ttfb_ms, len(text),
+                                )
+                                yield pcm, ttfb_ms
+                            else:
+                                yield pcm, -1.0
+                    if output.get("finish_reason") == "stop":
+                        break
+
+    async def synthesize_to_mp3(self, text: str) -> Tuple[bytes, float]:
+        """
+        流式取 PCM → ffmpeg 编 MP3 → 返回 (mp3_bytes, 首块到达延迟_ms)。
+        与 EdgeTTS 路径接口对齐，可直接 drop-in 替换 _synthesize_mp3_for_remote_timed。
+        """
+        if not text or not text.strip():
+            return b"", -1.0
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-loglevel", "error",
+            "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
+            "-af", "afade=t=in:st=0:d=0.015",
+            "-f", "mp3", "-codec:a", "libmp3lame", "-b:a", "64k", "pipe:1",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        first_chunk_ms = -1.0
+        pcm_total = 0
+        try:
+            async for pcm, ttfb in self.stream_pcm_chunks(text):
+                if first_chunk_ms < 0 and ttfb > 0:
+                    first_chunk_ms = ttfb
+                pcm_total += len(pcm)
+                if proc.stdin is not None:
+                    proc.stdin.write(pcm)
+                    await proc.stdin.drain()
+        except Exception as e:
+            logger.warning("[QwenTTS] 流式 PCM 异常: %s", e)
+        finally:
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+        try:
+            mp3, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return b"", first_chunk_ms
+        if pcm_total == 0:
+            logger.warning("[QwenTTS] PCM 为空 text='%s'", text[:30])
+            return b"", first_chunk_ms
+        return mp3 or b"", first_chunk_ms
 
     async def synthesize_to_opus_frames(self, text: str) -> List[bytes]:
         if not text or not text.strip():
