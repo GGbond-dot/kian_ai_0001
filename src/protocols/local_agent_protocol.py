@@ -82,6 +82,15 @@ class LocalAgentProtocol(Protocol):
         # _tts_remote_has_listeners: () -> bool       是否有平板正连着
         self._tts_remote_sink: Optional[Callable] = None
         self._tts_remote_has_listeners: Optional[Callable] = None
+        # 平板直连 TTS：JSON 下行（async (msg: dict) -> int）
+        self._tts_remote_text_sink: Optional[Callable] = None
+
+        # 平板直连段管理
+        self._tablet_segment_id: int = 0
+        self._tablet_segment_text: dict[int, str] = {}     # 已下发但未确认成功的段
+        self._tablet_failed_handled: set[int] = set()       # 已进过 fallback 的段（不重试两次）
+        self._tablet_consecutive_fail: int = 0              # 连续失败计数
+        self._tablet_session_disabled: bool = False         # 本轮对话临时禁用直连
 
         # 正在进行的 pipeline 任务（用于取消）
         self._pipeline_task: Optional[asyncio.Task] = None
@@ -435,6 +444,85 @@ class LocalAgentProtocol(Protocol):
         self._tts_remote_sink = sink
         self._tts_remote_has_listeners = has_listeners
 
+    def set_tts_remote_text_sink(self, text_sink: Callable) -> None:
+        """注册平板直连 TTS 的 JSON 下行通道（用于 tts_text 等控制帧）。
+
+        text_sink: async (msg: dict) -> int  返回成功推送的客户端数
+        """
+        self._tts_remote_text_sink = text_sink
+
+    def _is_tablet_direct_enabled(self) -> bool:
+        if self._tablet_session_disabled:
+            return False
+        if not bool(self.config.get_config("TTS.tablet_direct", False)):
+            return False
+        if self._tts_remote_text_sink is None:
+            return False
+        if self._tts_remote_has_listeners is None or not self._tts_remote_has_listeners():
+            return False
+        return True
+
+    def _reset_tablet_session_state(self) -> None:
+        """新一轮对话开始时清空平板直连的临时状态。"""
+        self._tablet_session_disabled = False
+        self._tablet_consecutive_fail = 0
+        self._tablet_failed_handled.clear()
+        self._tablet_segment_text.clear()
+
+    async def on_tablet_audio_out_text(self, msg: dict) -> None:
+        """处理平板上行的 JSON：当前只处理 tts_failed。"""
+        if not isinstance(msg, dict):
+            return
+        mtype = msg.get("type")
+        if mtype != "tts_failed":
+            logger.debug("[TTS/direct] 收到未知上行 type=%s", mtype)
+            return
+
+        seg_id = msg.get("segment_id")
+        reason = msg.get("reason", "unknown")
+        text = msg.get("text") or self._tablet_segment_text.get(seg_id, "")
+        logger.warning(
+            "[TTS/direct] 平板报告合成失败 seg=%s reason=%s 文本=%r",
+            seg_id, reason, (text or "")[:40],
+        )
+
+        if seg_id in self._tablet_failed_handled:
+            logger.info("[TTS/direct] seg=%s 已 fallback 过，忽略重复", seg_id)
+            return
+        if seg_id is not None:
+            self._tablet_failed_handled.add(seg_id)
+
+        # 累加连续失败 → 触发冷却
+        self._tablet_consecutive_fail += 1
+        threshold = int(self.config.get_config("TTS.tablet_fallback_cooldown_count", 3))
+        if self._tablet_consecutive_fail >= threshold:
+            self._tablet_session_disabled = True
+            logger.warning(
+                "[TTS/direct] 连续 %d 段失败，本轮对话剩余段降级走 mp3 旧路径",
+                self._tablet_consecutive_fail,
+            )
+
+        if not text or not text.strip():
+            logger.info("[TTS/direct] seg=%s 无文本，无法 fallback", seg_id)
+            return
+        if self._tts_remote_sink is None:
+            logger.warning("[TTS/direct] 无 mp3 sink，无法 fallback")
+            return
+
+        # 走旧路径补合成
+        try:
+            mp3, first_chunk_ms = await self._synthesize_mp3_for_remote_timed(text)
+            if not mp3:
+                logger.warning("[TTS/direct] fallback 合成为空 seg=%s", seg_id)
+                return
+            n = await self._tts_remote_sink(mp3)
+            logger.info(
+                "[TTS/direct] fallback ok seg=%s 首块=%.0fms 字数=%d 客户端=%d",
+                seg_id, first_chunk_ms, len(text), n,
+            )
+        except Exception as e:
+            logger.error("[TTS/direct] fallback 推送异常 seg=%s: %s", seg_id, e, exc_info=True)
+
     def feed_external_pcm(self, pcm_bytes: bytes) -> None:
         """
         接收外部 PCM 输入（16kHz / 16-bit / 单声道）。
@@ -614,6 +702,9 @@ class LocalAgentProtocol(Protocol):
     async def _tts_sink_one_segment(self, seg: str) -> bool:
         """
         合成单段并推到远端 sink。返回是否成功推送。
+        分两条路径：
+          - TTS.tablet_direct=true 且平板已连：发 tts_text JSON，平板自合成
+          - 否则：开发板合成 mp3 → 推 audio_out 二进制
         """
         seg = self._clean_text_for_tts(seg)
         if not seg.strip():
@@ -622,6 +713,38 @@ class LocalAgentProtocol(Protocol):
         if not _re.search(r"[一-鿿0-9A-Za-z]", seg):
             logger.info("[TTS/stream] 段无可朗读内容，跳过 seg=%r", seg)
             return False
+
+        # 路径 A：平板直连（JSON 下行，平板自己 fetch 云 TTS）
+        if self._is_tablet_direct_enabled():
+            seg_id = self._tablet_segment_id
+            self._tablet_segment_id += 1
+            self._tablet_segment_text[seg_id] = seg
+            voice = str(self.config.get_config("TTS.qwen_voice", "Cherry"))
+            msg = {
+                "type": "tts_text",
+                "segment_id": seg_id,
+                "text": seg,
+                "voice": voice,
+            }
+            try:
+                push_t0 = time.perf_counter()
+                n = await self._tts_remote_text_sink(msg)
+                push_ms = (time.perf_counter() - push_t0) * 1000
+                if n <= 0:
+                    logger.info("[TTS/direct] seg=%d 无客户端接收，回退 mp3 路径", seg_id)
+                    # 没人接收 → 直接回退本段
+                    self._tablet_segment_text.pop(seg_id, None)
+                else:
+                    logger.info(
+                        "[TTS/direct] seg=%d ok 字数=%d 推送=%.0fms 客户端=%d",
+                        seg_id, len(seg), push_ms, n,
+                    )
+                    return True
+            except Exception as e:
+                logger.warning("[TTS/direct] seg=%d 下行失败: %s, 回退 mp3 路径", seg_id, e)
+                self._tablet_segment_text.pop(seg_id, None)
+
+        # 路径 B：旧的 mp3 推流（兜底）
         if self._tts_remote_sink is None or self._tts_remote_has_listeners is None:
             return False
         if not self._tts_remote_has_listeners():
@@ -833,6 +956,7 @@ class LocalAgentProtocol(Protocol):
         文字输入直达 LLM pipeline：跳过 STT，直接推理，TTS 可选。
         适用于：用户在 UI 输入框打字、WSL 无麦克风环境。
         """
+        self._reset_tablet_session_state()
         try:
             # 切换到 SPEAKING 状态并显示用户输入
             self._fire_json({"type": "tts", "state": "start"})
@@ -895,6 +1019,7 @@ class LocalAgentProtocol(Protocol):
 
     async def _run_agent_pipeline_after_stt(self, user_text: str) -> None:
         """STT 完成之后的公共部分：三层路由 (Tier 0 关键词 → Tier 1 flash → Tier 2 fallback)。"""
+        self._reset_tablet_session_state()
         if not user_text:
             logger.info("STT 未识别到有效内容，流水线终止")
             self._fire_json({"type": "stt", "state": "stop", "text": ""})

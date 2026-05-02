@@ -114,6 +114,20 @@ class UIPlugin(Plugin):
                 self.display.has_audio_out_listeners,
             )
 
+        # 平板直连 TTS：JSON 下行 + 上行回调
+        if (
+            protocol is not None
+            and hasattr(self.display, "broadcast_audio_out_text")
+            and hasattr(protocol, "set_tts_remote_text_sink")
+        ):
+            protocol.set_tts_remote_text_sink(self.display.broadcast_audio_out_text)
+        if (
+            protocol is not None
+            and hasattr(self.display, "set_audio_out_text_callback")
+            and hasattr(protocol, "on_tablet_audio_out_text")
+        ):
+            self.display.set_audio_out_text_callback(protocol.on_tablet_audio_out_text)
+
     async def _on_external_pcm(self, pcm_bytes: bytes, meta: dict) -> None:
         """把 /ws/audio_in 收到的 PCM 喂给当前 protocol。"""
         protocol = getattr(self.app, "protocol", None)

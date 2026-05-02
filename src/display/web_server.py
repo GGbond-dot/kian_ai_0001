@@ -42,6 +42,9 @@ class WebServer:
         self._server = None
         self._command_callback: Optional[Callable] = None
         self._audio_in_callback: Optional[Callable] = None
+        # 平板回报 tts_failed 等上行 JSON 的回调
+        # 签名: async (msg: dict) -> None
+        self._audio_out_text_callback: Optional[Callable] = None
 
         # 平板麦克风调试落盘目录（每次连接新建一个 wav）
         self._audio_in_dump_dir = Path("logs/tablet_audio_in")
@@ -62,6 +65,13 @@ class WebServer:
     def set_command_callback(self, callback: Callable) -> None:
         """设置控制指令回调."""
         self._command_callback = callback
+
+    def set_audio_out_text_callback(self, callback: Callable) -> None:
+        """设置平板侧上行 JSON 回调（如 tts_failed）。
+
+        callback 签名: async (msg: dict) -> None
+        """
+        self._audio_out_text_callback = callback
 
     def set_audio_in_callback(self, callback: Callable) -> None:
         """设置平板麦克风 PCM 入流回调.
@@ -291,8 +301,21 @@ class WebServer:
         )
         try:
             while True:
-                # 当前是单向推流，仅保活；如果客户端发文本帧，忽略
-                await websocket.receive()
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                # 文本帧：平板上行 JSON（tts_failed 等）
+                text = msg.get("text")
+                if text is not None and self._audio_out_text_callback is not None:
+                    try:
+                        data = json.loads(text)
+                    except Exception:
+                        logger.debug("audio_out 文本帧 JSON 解析失败: %r", text[:200])
+                        continue
+                    try:
+                        await self._audio_out_text_callback(data)
+                    except Exception as e:
+                        logger.error("audio_out 文本回调失败: %s", e)
         except WebSocketDisconnect:
             pass
         except Exception as e:
@@ -315,6 +338,23 @@ class WebServer:
         for ws in self._audio_out_connections:
             try:
                 await ws.send_bytes(mp3_bytes)
+                ok += 1
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._audio_out_connections.discard(ws)
+        return ok
+
+    async def broadcast_audio_out_text(self, msg: dict) -> int:
+        """把 JSON 文本帧广播给所有 /ws/audio_out 连接（用于 tts_text 等下行控制）。"""
+        if not self._audio_out_connections:
+            return 0
+        payload = json.dumps(msg, ensure_ascii=False)
+        dead: list[WebSocket] = []
+        ok = 0
+        for ws in self._audio_out_connections:
+            try:
+                await ws.send_text(payload)
                 ok += 1
             except Exception:
                 dead.append(ws)

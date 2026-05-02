@@ -49,6 +49,12 @@ class WebDisplay(BaseDisplay):
     async def broadcast_audio_out(self, mp3_bytes: bytes) -> int:
         return await self.server.broadcast_audio_out(mp3_bytes)
 
+    async def broadcast_audio_out_text(self, msg: dict) -> int:
+        return await self.server.broadcast_audio_out_text(msg)
+
+    def set_audio_out_text_callback(self, callback: Callable) -> None:
+        self.server.set_audio_out_text_callback(callback)
+
     async def set_callbacks(
         self,
         press_callback: Optional[Callable] = None,
