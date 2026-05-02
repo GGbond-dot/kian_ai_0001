@@ -92,6 +92,12 @@ class WebServer:
             slam_file = STATIC_DIR / "slam.html"
             return HTMLResponse(slam_file.read_text(encoding="utf-8"))
 
+        # 平板直连 TTS PoC（临时验证页，方案敲定后删）
+        @app.get("/tts_poc")
+        async def tts_poc_page():
+            poc_file = STATIC_DIR / "tts_poc.html"
+            return HTMLResponse(poc_file.read_text(encoding="utf-8"))
+
         # 静态文件
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
