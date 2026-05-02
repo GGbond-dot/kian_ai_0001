@@ -12,7 +12,7 @@
   <link rel="apple-touch-icon" href="/static/icon.svg">
   <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
   <title>AI Agent Console</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
 
@@ -30,6 +30,7 @@
       <div class="title-sub">STANDBY</div>
     </div>
     <div class="conn-badge disconnected">OFFLINE</div>
+    <button id="btn-map" class="title-action title-action-wide" title="建图" aria-label="建图">地图</button>
     <button id="btn-fullscreen" class="title-action" title="全屏" aria-label="全屏">⛶</button>
   </div>
 
@@ -74,7 +75,7 @@
         <div class="core-shell">
           <div class="core-inner">
             <div class="emotion-display">
-              <span class="emoji">&#x1F60A;</span>
+              <span class="ai-mark">AI</span>
             </div>
           </div>
         </div>
@@ -102,7 +103,7 @@
 
   <!-- 底部控制栏 -->
   <div class="bottom-bar">
-    <button id="btn-manual" class="btn btn-primary">按住后说话</button>
+    <button id="btn-manual" class="btn btn-primary" data-manual-button>按住后说话</button>
     <button id="btn-auto" class="btn btn-primary" style="display:none">开始对话</button>
     <button id="btn-abort" class="btn btn-secondary">打断对话</button>
     <div class="input-group">
@@ -112,10 +113,20 @@
     <button id="btn-mode" class="btn btn-secondary">手动对话</button>
   </div>
 
+  <!-- SLAM 全屏覆盖层：不卸载 AI 主页面，避免对话和音频 WS 重启 -->
+  <div id="slam-overlay" class="slam-overlay" aria-hidden="true">
+    <iframe id="slam-frame" class="slam-frame" title="SLAM 建图视图" data-src="/slam?embedded=1"></iframe>
+    <div class="slam-floating-bar">
+      <button id="btn-slam-close" class="btn btn-secondary">返回 AI</button>
+      <button id="btn-slam-manual" class="btn btn-primary" data-manual-button>按住后说话</button>
+      <button id="btn-slam-abort" class="btn btn-secondary">打断</button>
+    </div>
+  </div>
+
 </div>
 
-<script src="/static/app.js?v=4"></script>
-<script src="/static/tablet_mic.js?v=4"></script>
+<script src="/static/app.js?v=5"></script>
+<script src="/static/tablet_mic.js?v=5"></script>
 <script src="/static/audio_out.js?v=4"></script>
 <script src="/static/tts_direct.js?v=5"></script>
 <script>

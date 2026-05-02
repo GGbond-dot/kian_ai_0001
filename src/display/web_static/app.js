@@ -20,13 +20,17 @@
   const emotionEl    = $('.emotion-display');
   const transcriptBody = $('.transcript-body');
   const transcriptCard = $('.transcript-card');
-  const btnManual    = $('#btn-manual');
   const btnAuto      = $('#btn-auto');
   const btnAbort     = $('#btn-abort');
   const btnMode      = $('#btn-mode');
   const btnSend      = $('#btn-send');
   const textInput    = $('#text-input');
   const btnFullscreen = $('#btn-fullscreen');
+  const btnMap = $('#btn-map');
+  const slamOverlay = $('#slam-overlay');
+  const slamFrame = $('#slam-frame');
+  const btnSlamClose = $('#btn-slam-close');
+  const btnSlamAbort = $('#btn-slam-abort');
 
   // ===================== 全屏 =====================
   // 华为浏览器/微信内置浏览器都不认 PWA display:fullscreen，
@@ -49,6 +53,26 @@
       }
     });
   }
+
+  // ===================== SLAM 覆盖层 =====================
+  function openSlamOverlay() {
+    if (!slamOverlay || !slamFrame) return;
+    if (!slamFrame.src) {
+      slamFrame.src = slamFrame.dataset.src || '/slam?embedded=1';
+    }
+    slamOverlay.classList.add('active');
+    slamOverlay.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeSlamOverlay() {
+    if (!slamOverlay) return;
+    slamOverlay.classList.remove('active');
+    slamOverlay.setAttribute('aria-hidden', 'true');
+  }
+
+  if (btnMap) btnMap.addEventListener('click', openSlamOverlay);
+  if (btnSlamClose) btnSlamClose.addEventListener('click', closeSlamOverlay);
+  if (btnSlamAbort) btnSlamAbort.addEventListener('click', () => send({ action: 'abort' }));
 
   // ===================== 状态 =====================
   let ws = null;
@@ -218,15 +242,7 @@
     core.classList.add('pop');
     setTimeout(() => core.classList.remove('pop'), 300);
 
-    // 判断是 emoji 还是图片路径
-    if (emotion.includes('/') || emotion.includes('.')) {
-      // 图片 (通过 /emojis/ 路由提供)
-      const name = emotion.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
-      emotionEl.innerHTML = `<img src="/emojis/${name}.gif" alt="${name}" onerror="this.parentElement.innerHTML='<span class=emoji>&#x1F60A;</span>'">`;
-    } else {
-      // Emoji 字符
-      emotionEl.innerHTML = `<span class="emoji">${emotion || '&#x1F60A;'}</span>`;
-    }
+    emotionEl.innerHTML = '<span class="ai-mark">AI</span>';
   }
 
   function updateButtonText(text) {
@@ -235,7 +251,9 @@
 
   function setAutoMode(isAuto) {
     autoMode = isAuto;
-    btnManual.style.display = isAuto ? 'none' : '';
+    document.querySelectorAll('[data-manual-button]').forEach((button) => {
+      button.style.display = isAuto ? 'none' : '';
+    });
     btnAuto.style.display = isAuto ? '' : 'none';
     btnMode.textContent = isAuto ? '自动对话' : '手动对话';
   }
@@ -249,7 +267,9 @@
     e.preventDefault();
     if (isManualPressed) return;
     isManualPressed = true;
-    btnManual.textContent = '松开以停止';
+    document.querySelectorAll('[data-manual-button]').forEach((button) => {
+      button.textContent = '松开以停止';
+    });
     send({ action: 'press' });
   }
 
@@ -257,17 +277,21 @@
     e.preventDefault();
     if (!isManualPressed) return;
     isManualPressed = false;
-    btnManual.textContent = '按住后说话';
+    document.querySelectorAll('[data-manual-button]').forEach((button) => {
+      button.textContent = '按住后说话';
+    });
     send({ action: 'release' });
   }
 
   // 触摸和鼠标事件
-  btnManual.addEventListener('mousedown', onManualStart);
-  btnManual.addEventListener('mouseup', onManualEnd);
-  btnManual.addEventListener('mouseleave', onManualEnd);
-  btnManual.addEventListener('touchstart', onManualStart, { passive: false });
-  btnManual.addEventListener('touchend', onManualEnd, { passive: false });
-  btnManual.addEventListener('touchcancel', onManualEnd, { passive: false });
+  document.querySelectorAll('[data-manual-button]').forEach((button) => {
+    button.addEventListener('mousedown', onManualStart);
+    button.addEventListener('mouseup', onManualEnd);
+    button.addEventListener('mouseleave', onManualEnd);
+    button.addEventListener('touchstart', onManualStart, { passive: false });
+    button.addEventListener('touchend', onManualEnd, { passive: false });
+    button.addEventListener('touchcancel', onManualEnd, { passive: false });
+  });
 
   // 自动模式
   btnAuto.addEventListener('click', () => send({ action: 'auto' }));

@@ -28,6 +28,10 @@ html, body {
   z-index: 10;
 }
 
+.embedded .slam-topbar {
+  display: none;
+}
+
 .back-link {
   color: #7eb8ff;
   text-decoration: none;

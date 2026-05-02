@@ -79,21 +79,23 @@
 
   // 把"按住说话"按钮的按下/松开同步到原生录音
   function hookManual() {
-    const btn = document.getElementById('btn-manual');
-    if (!btn) {
-      log('未找到 #btn-manual, 100ms 后重试');
+    const buttons = document.querySelectorAll('[data-manual-button]');
+    if (!buttons.length) {
+      log('未找到 [data-manual-button], 100ms 后重试');
       setTimeout(hookManual, 100);
       return;
     }
     const start = () => { wantOpen = true; ensureWs(); window.AudioBridge.start(); };
     const stop = () => { if (!wantOpen) return; wantOpen = false; window.AudioBridge.stop(); };
-    btn.addEventListener('mousedown', start);
-    btn.addEventListener('touchstart', start, { passive: false });
-    btn.addEventListener('mouseup', stop);
-    btn.addEventListener('mouseleave', stop);
-    btn.addEventListener('touchend', stop, { passive: false });
-    btn.addEventListener('touchcancel', stop, { passive: false });
-    log('已绑定到按钮', btn.id);
+    buttons.forEach((btn) => {
+      btn.addEventListener('mousedown', start);
+      btn.addEventListener('touchstart', start, { passive: false });
+      btn.addEventListener('mouseup', stop);
+      btn.addEventListener('mouseleave', stop);
+      btn.addEventListener('touchend', stop, { passive: false });
+      btn.addEventListener('touchcancel', stop, { passive: false });
+    });
+    log('已绑定到按钮数量', buttons.length);
   }
 
   if (document.readyState === 'loading') {
