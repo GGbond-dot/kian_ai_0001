@@ -50,7 +50,11 @@
   }
   unlockOnGesture();
 
-  function playPcmChunk(pcmU8) {
+  // 段起始 15ms fade-in，抑制 Web Audio 冷启动 / 段首振幅突跳的 click
+  // 与 v3 后端 qwen_tts_client 的 fade-in 等价
+  const FADE_IN_SAMPLES = Math.floor(SAMPLE_RATE * 0.015);
+
+  function playPcmChunk(pcmU8, fadeIn) {
     const ctx = ensureCtx();
     const samples = pcmU8.length >> 1;
     if (samples <= 0) return;
@@ -58,6 +62,10 @@
     const ch = buffer.getChannelData(0);
     const view = new DataView(pcmU8.buffer, pcmU8.byteOffset, pcmU8.byteLength);
     for (let i = 0; i < samples; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+    if (fadeIn) {
+      const n = Math.min(FADE_IN_SAMPLES, samples);
+      for (let i = 0; i < n; i++) ch[i] *= i / n;
+    }
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(ctx.destination);
@@ -199,7 +207,8 @@
           let i = 0;
           while (true) {
             while (i < seg.chunks.length) {
-              playPcmChunk(seg.chunks[i]);
+              // 段首 chunk 加 fade-in，避免冷启动 / 段首振幅突跳的 click
+              playPcmChunk(seg.chunks[i], i === 0);
               i++;
             }
             if (seg.done) break;
@@ -240,10 +249,50 @@
     playLoop();
   }
 
+  // 起步预热：发一发极小的 dashscope SSE 请求，把 TLS+HTTP/2 握手做掉。
+  // 浏览器原生维护连接池，后续真合成可复用同一条 HTTP/2 通道（PoC 实测从 533ms 降到 ~283ms）。
+  let warmupDone = false;
+  async function warmupFetch() {
+    if (warmupDone) return;
+    warmupDone = true;
+    const ctrl = new AbortController();
+    const t0 = performance.now();
+    try {
+      const r = await fetch(URL, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: {
+          'Authorization': 'Bearer ' + API_KEY,
+          'Content-Type': 'application/json',
+          'X-DashScope-SSE': 'enable',
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          input: { text: '嗨', voice: 'Cherry', language_type: 'Chinese' },
+        }),
+      });
+      if (!r.ok) {
+        log('warmup 非200', r.status);
+        return;
+      }
+      const reader = r.body.getReader();
+      // 读到首块就 abort，足够把 TLS+连接握好
+      await reader.read();
+      ctrl.abort();
+      log('warmup 完成', (performance.now() - t0).toFixed(0), 'ms');
+    } catch (e) {
+      if (e.name !== 'AbortError') log('warmup 异常', e);
+    }
+  }
+
   function connect() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     ws = new WebSocket(WS_URL);
-    ws.onopen = () => log('已连接', WS_URL);
+    ws.onopen = () => {
+      log('已连接', WS_URL);
+      // 页面加载后异步预热一次（不阻塞 UI）
+      warmupFetch();
+    };
     ws.onmessage = (ev) => {
       // 二进制帧（mp3 fallback 路径）由 audio_out.js 处理，这里只看 JSON
       if (typeof ev.data !== 'string') return;

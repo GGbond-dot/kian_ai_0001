@@ -99,6 +99,9 @@ class LocalAgentProtocol(Protocol):
 
         # edge-tts 预热：和 LLM 推理并行做 TLS+WSS 握手
         self._tts_warmup_task: Optional[asyncio.Task] = None
+        # qwen-flash 预热：在录音开始时主动握手，等 STT 出来时连接已热
+        self._llm_fast_warmup_task: Optional[asyncio.Task] = None
+        self._llm_fast_last_warmup_ms: float = 0.0
 
         # 懒加载的模块实例
         self._stt = None
@@ -558,6 +561,9 @@ class LocalAgentProtocol(Protocol):
                 self._opus_buffer.clear()
                 self._external_pcm_chunks.clear()
                 self._reset_listen_tracking()
+                # 录音的同时预热 qwen-flash：把 STT 那段时间填满，
+                # 等 STT 出文本时 LLM 连接已经热好
+                self._kick_llm_fast_warmup()
 
             elif state == "stop":
                 logger.info("LocalAgentProtocol：停止录音，触发 Agent 流水线")
@@ -833,6 +839,53 @@ class LocalAgentProtocol(Protocol):
             logger.info("[TTS/warmup] 已触发预热任务")
         except RuntimeError as e:
             logger.warning("[TTS/warmup] create_task 失败: %s", e)
+
+    def _kick_llm_fast_warmup(self) -> None:
+        """
+        预热 qwen-flash：在用户开始录音时跑一发极小的 chat completion，
+        把 TLS+连接池准备好；等 STT 出来时连接还热。
+        4s 内重复触发会被合并。
+        """
+        if self._llm_fast_warmup_task and not self._llm_fast_warmup_task.done():
+            return
+        now_ms = time.perf_counter() * 1000
+        if now_ms - self._llm_fast_last_warmup_ms < 4000:
+            return
+        self._llm_fast_last_warmup_ms = now_ms
+
+        async def _warmup():
+            try:
+                from src.llm.llm_client import LLMClient
+                if not getattr(self, "_llm_fast", None):
+                    self._llm_fast = LLMClient(config_section="LLM_FAST")
+                t0 = time.perf_counter()
+                stream = await self._llm_fast.chat_completion(
+                    messages=[{"role": "user", "content": "嗨"}],
+                    tools=None, stream=True,
+                )
+                got_first = False
+                async for chunk in stream:
+                    if getattr(chunk, "choices", None):
+                        got_first = True
+                        break
+                try:
+                    await stream.aclose()
+                except Exception:
+                    pass
+                logger.info(
+                    "[LLM/warmup] qwen-flash 预热完成 %.0fms (首token=%s)",
+                    (time.perf_counter() - t0) * 1000, got_first,
+                )
+            except Exception as e:
+                logger.warning("[LLM/warmup] 失败: %s", e)
+
+        try:
+            self._llm_fast_warmup_task = asyncio.create_task(
+                _warmup(), name="llm-fast-warmup"
+            )
+            logger.info("[LLM/warmup] 已触发 qwen-flash 预热")
+        except RuntimeError as e:
+            logger.warning("[LLM/warmup] create_task 失败: %s", e)
 
     async def _synthesize_mp3_for_remote_timed(self, text: str):
         """带耗时埋点的远端 mp3 合成。返回 (mp3_bytes, 首个 audio 块到达耗时_ms)。"""
