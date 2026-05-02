@@ -77,6 +77,11 @@ class LocalAgentProtocol(Protocol):
         # 与 _opus_buffer 互斥使用：本轮谁有数据走谁
         self._external_pcm_chunks: List[bytes] = []
 
+        # 流式 STT 会话（paraformer-realtime-v2）：边录边传，停止时立刻拿最终文本
+        # 失败/超时则自动降级到批量 transcribe_pcm（缓冲始终保留作兜底）
+        self._stream_stt = None
+        self._stream_stt_active: bool = False
+
         # TTS 远端输出（平板播放）
         # _tts_remote_sink: async (mp3_bytes) -> int  返回成功推送的客户端数
         # _tts_remote_has_listeners: () -> bool       是否有平板正连着
@@ -167,6 +172,41 @@ class LocalAgentProtocol(Protocol):
 
     def _get_stt_provider_name(self) -> str:
         return str(self.config.get_config("STT.provider", "whisper")).strip().lower()
+
+    async def _kick_stream_stt_start(self) -> None:
+        try:
+            stt = self._get_stream_stt()
+            ok = await stt.start_session()
+            if not ok or not self._is_listening:
+                self._stream_stt_active = False
+                return
+            # 重放握手期间积压的 chunks，反复直到稳定（buffer 长度不再增长）。
+            # 最后一次 break → active=True 之间无 await，feed_external_pcm 无法插入丢帧。
+            fed = 0
+            while True:
+                end = len(self._external_pcm_chunks)
+                if end == fed:
+                    break
+                for i in range(fed, end):
+                    await stt.feed(self._external_pcm_chunks[i])
+                fed = end
+            self._stream_stt_active = True
+        except Exception as e:
+            logger.warning("[stream-stt] 启动会话失败：%s", e)
+            self._stream_stt_active = False
+
+    def _is_stream_stt_enabled(self) -> bool:
+        if not bool(self.config.get_config("STT.streaming_enabled", False)):
+            return False
+        provider = self._get_stt_provider_name()
+        return provider in {"qwen", "qwen_asr", "qwen-asr", "dashscope"}
+
+    def _get_stream_stt(self):
+        if self._stream_stt is None:
+            from src.stt.qwen_stream_stt import QwenStreamSTT
+
+            self._stream_stt = QwenStreamSTT()
+        return self._stream_stt
 
     def _get_tts_provider_name(self) -> str:
         return str(self.config.get_config("TTS.provider", "edge")).strip().lower()
@@ -287,6 +327,11 @@ class LocalAgentProtocol(Protocol):
             if self._pipeline_task and not self._pipeline_task.done():
                 self._pipeline_task.cancel()
 
+            # 流式 STT 会话取下来交给后续逻辑：pcm 分支用它 finish，其他分支 abort
+            stream_stt = self._stream_stt if self._stream_stt_active else None
+            self._stream_stt_active = False
+            self._stream_stt = None
+
             # 优先用外部 PCM（平板等远端麦克风），其次本地 Opus 帧
             if pcm_chunks:
                 pcm_total = b"".join(pcm_chunks)
@@ -294,17 +339,20 @@ class LocalAgentProtocol(Protocol):
                     "LocalAgentProtocol：使用外部 PCM 走 STT，字节=%d", len(pcm_total)
                 )
                 self._pipeline_task = asyncio.create_task(
-                    self._run_agent_pipeline_pcm(pcm_total),
+                    self._run_agent_pipeline_pcm(pcm_total, stream_stt=stream_stt),
                     name="local-agent-pipeline-pcm",
                 )
-            elif frames:
-                self._pipeline_task = asyncio.create_task(
-                    self._run_agent_pipeline(frames),
-                    name="local-agent-pipeline",
-                )
             else:
-                logger.info("LocalAgentProtocol：无音频帧，跳过 STT pipeline")
-                self._fire_json({"type": "tts", "state": "stop"})
+                if stream_stt is not None:
+                    asyncio.create_task(stream_stt.abort())
+                if frames:
+                    self._pipeline_task = asyncio.create_task(
+                        self._run_agent_pipeline(frames),
+                        name="local-agent-pipeline",
+                    )
+                else:
+                    logger.info("LocalAgentProtocol：无音频帧，跳过 STT pipeline")
+                    self._fire_json({"type": "tts", "state": "stop"})
 
     def _schedule_auto_stop(self, reason: str):
         if self._auto_stop_task and not self._auto_stop_task.done():
@@ -526,7 +574,7 @@ class LocalAgentProtocol(Protocol):
         except Exception as e:
             logger.error("[TTS/direct] fallback 推送异常 seg=%s: %s", seg_id, e, exc_info=True)
 
-    def feed_external_pcm(self, pcm_bytes: bytes) -> None:
+    async def feed_external_pcm(self, pcm_bytes: bytes) -> None:
         """
         接收外部 PCM 输入（16kHz / 16-bit / 单声道）。
 
@@ -536,6 +584,9 @@ class LocalAgentProtocol(Protocol):
         """
         if self._is_listening and pcm_bytes:
             self._external_pcm_chunks.append(pcm_bytes)
+            if self._stream_stt_active and self._stream_stt is not None:
+                # 顺序 await 保证 WS 帧不乱序；缓冲保留作 fallback 兜底
+                await self._stream_stt.feed(pcm_bytes)
 
     async def send_text(self, message: str):
         """
@@ -564,6 +615,10 @@ class LocalAgentProtocol(Protocol):
                 # 录音的同时预热 qwen-flash：把 STT 那段时间填满，
                 # 等 STT 出文本时 LLM 连接已经热好
                 self._kick_llm_fast_warmup()
+                # 流式 STT 会话：开关打开则后台建立，建立失败自动降级
+                self._stream_stt_active = False
+                if self._is_stream_stt_enabled():
+                    asyncio.create_task(self._kick_stream_stt_start())
 
             elif state == "stop":
                 logger.info("LocalAgentProtocol：停止录音，触发 Agent 流水线")
@@ -1358,20 +1413,38 @@ class LocalAgentProtocol(Protocol):
             logger.error("[TTS/stream] 流式管线异常：%s", e, exc_info=True)
         return "".join(full)
 
-    async def _run_agent_pipeline_pcm(self, pcm_bytes: bytes):
-        """外部 PCM 输入版本：跳过 Opus 解码，直接走 STT。"""
+    async def _run_agent_pipeline_pcm(self, pcm_bytes: bytes, stream_stt=None):
+        """外部 PCM 输入版本：跳过 Opus 解码，直接走 STT。
+
+        优先用流式 STT 拿最终文本；任一失败/超时降级到批量 transcribe_pcm。
+        """
         try:
             self._fire_json({"type": "stt", "state": "start"})
-            stt = self._get_stt()
-            transcribe_pcm = getattr(stt, "transcribe_pcm", None)
-            if transcribe_pcm is None:
-                logger.warning(
-                    "当前 STT provider 不支持 transcribe_pcm，回退跳过外部 PCM"
+
+            user_text: Optional[str] = None
+            if stream_stt is not None:
+                timeout_ms = float(
+                    self.config.get_config("STT.streaming_finish_timeout_ms", 1500)
                 )
-                self._fire_json({"type": "stt", "state": "stop", "text": ""})
-                self._fire_json({"type": "tts", "state": "stop"})
-                return
-            user_text = await transcribe_pcm(pcm_bytes)
+                t0 = time.perf_counter()
+                user_text = await stream_stt.finish(timeout=timeout_ms / 1000.0)
+                dt = (time.perf_counter() - t0) * 1000
+                if user_text is None:
+                    logger.warning("[stream-stt] finish 失败/超时，降级走批量 STT")
+                else:
+                    logger.info("[stream-stt] finish 完成 %.0fms 字数=%d", dt, len(user_text))
+
+            if user_text is None:
+                stt = self._get_stt()
+                transcribe_pcm = getattr(stt, "transcribe_pcm", None)
+                if transcribe_pcm is None:
+                    logger.warning(
+                        "当前 STT provider 不支持 transcribe_pcm，回退跳过外部 PCM"
+                    )
+                    self._fire_json({"type": "stt", "state": "stop", "text": ""})
+                    self._fire_json({"type": "tts", "state": "stop"})
+                    return
+                user_text = await transcribe_pcm(pcm_bytes)
             await self._run_agent_pipeline_after_stt(user_text)
         except asyncio.CancelledError:
             logger.info("Agent 流水线(PCM) 被取消")

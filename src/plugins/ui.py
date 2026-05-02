@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Optional
 
 from src.constants.constants import AbortReason, DeviceState
@@ -137,7 +138,9 @@ class UIPlugin(Plugin):
         if feed is None:
             return
         try:
-            feed(pcm_bytes)
+            res = feed(pcm_bytes)
+            if asyncio.iscoroutine(res):
+                await res
         except Exception as e:
             logger.error("feed_external_pcm 失败: %s", e)
 

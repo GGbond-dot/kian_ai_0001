@@ -94,7 +94,11 @@ class WebServer:
         @app.get("/")
         async def index():
             index_file = STATIC_DIR / "index.html"
-            return HTMLResponse(index_file.read_text(encoding="utf-8"))
+            # 禁止缓存 HTML 本体；脚本通过 ?v=N 自带缓存破除
+            return HTMLResponse(
+                index_file.read_text(encoding="utf-8"),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
         # SLAM 可视化页面
         @app.get("/slam")

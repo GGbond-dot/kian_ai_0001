@@ -1,7 +1,7 @@
-# 物流系统终端机器人 — 平板直连 TTS（接力交接 v4）
+# 物流系统终端机器人 — 平板直连 TTS（接力交接 v4，**改造已完成**）
 
-> 接 `background02.md`（v3 已落地：edge-tts→qwen-tts，端到端 1554ms）。  
-> 本文档为 v4 阶段——**评估并设计"平板端直连云 TTS"方案**，PoC 完成、改造未做。
+> 接 `background02.md`（v3 已落地：edge-tts→qwen-tts，端到端 1554ms）。
+> v4 平板直连云 TTS 改造 + LLM/平板双预热已落地实测，本文档已更新为完成态。
 
 ---
 
@@ -12,168 +12,219 @@
 - 所有性能数据均来自开发板/平板实测
 - 平板（华为 MatePad）= 展示 + 麦克风 + 音频播放端，APK 是 WebView 壳子加载 `http://192.168.10.1:8080/`
 - **平板代码就在本仓库** `android_webview/`（Kotlin+WebView），UI 实质是 `src/display/web_static/` 下的 HTML/JS
+- PC 上允许做的：纯静态校验（`python3 -c "import ast"`、`node --check`、`json.load`），不会启动项目
 
 ---
 
 ## v4 阶段：本次已完成的事
 
-### 1. 豆包 TTS（火山引擎）评估 → **不切**
+### 1. 豆包 TTS（火山引擎）评估 → **不切**（保留 v3 否决结论）
 
 测试脚本：`scripts/qwen_tts_latency_test.py`、`scripts/volcano_tts_latency_test.py`
 
-火山新版鉴权确认（与文档不同）：**只需 `X-Api-Key` + `X-Api-Resource-Id`**，不要 App-Id / Access-Key。  
+火山新版鉴权确认（与文档不同）：**只需 `X-Api-Key` + `X-Api-Resource-Id`**，不要 App-Id / Access-Key。
 - Endpoint: `https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse`
-- Resource-Id: `seed-tts-2.0`（语音合成大模型 2.0）
+- Resource-Id: `seed-tts-2.0`
 - 音色 ID 示例: `zh_female_vv_uranus_bigtts`
 
-**开发板实测对比（28 字测试文本，多次均值）**：
+**决策**：不切。延迟持平、音色持平、带宽优势在当前管线消化。
 
-| 指标 | qwen-tts | 豆包 TTS | 备注 |
-|---|---|---|---|
-| 首块延迟 | ~478 ms | ~460 ms | 噪声内 |
-| 全部合成 | ~1440 ms | ~1400 ms | 持平 |
-| 数据量 | ~270 KB (PCM) | ~45 KB (mp3) | 豆包 1/6 |
-| 音色（用户主观） | Cherry | uranus_bigtts | 差不多 |
+### 2. 平板直连云 TTS PoC → 数据漂亮（保留作回归）
 
-**决策**：不切。延迟持平、音色持平、带宽优势在当前管线（qwen 转 mp3 后再推平板）被消化。改半天代码收益≈0。
+PoC 文件（**保留勿删**）：
+- `src/display/web_static/tts_poc.html` / `tts_poc.js`
+- `src/display/web_server.py` 的 `@app.get("/tts_poc")` 路由
+- 平板访问 `http://192.168.10.1:8080/tts_poc`
 
-### 2. 平板直连云 TTS PoC → **数据漂亮，确定要做**
+**核心发现**：浏览器原生 HTTP/2 长连接复用，省 TLS 握手 ~250ms；稳态首块 ~283ms，冷启动 533ms。
 
-PoC 文件（**保留勿删，作回归测试用**）：
-- `src/display/web_static/tts_poc.html`
-- `src/display/web_static/tts_poc.js`
-- `src/display/web_server.py` 加了 `@app.get("/tts_poc")` 路由
+### 3. 正式改造已落地
 
-平板访问：`http://192.168.10.1:8080/tts_poc`
+#### 3.1 改动文件清单（已实施）
 
-**平板浏览器实测（同 28 字文本，连续点击 6 次）**：
+| 文件 | 改动 |
+|---|---|
+| `config/config.json` | 加 `TTS.tablet_direct: true`、`TTS.tablet_api_key`、`TTS.tablet_fallback_cooldown_count: 3` |
+| `src/protocols/local_agent_protocol.py` | `_tts_sink_one_segment` 按 `tablet_direct` 分发；新增 `set_tts_remote_text_sink` / `on_tablet_audio_out_text` / 段 id 计数 / 冷却 / fallback 重合成；新增 `_kick_llm_fast_warmup` |
+| `src/display/web_server.py` | `/ws/audio_out` 接收文本帧；新增 `broadcast_audio_out_text` 下行、`set_audio_out_text_callback` 上行；`/` 路由加 no-cache 头 |
+| `src/display/web_display.py` | 透传 `broadcast_audio_out_text` / `set_audio_out_text_callback` |
+| `src/plugins/ui.py` | 把 text_sink 注册给 protocol，把上行回调挂到 `protocol.on_tablet_audio_out_text` |
+| `src/display/web_static/tts_direct.js`（**新建**） | 监听 audio_out WS 的 `tts_text` JSON → fetch dashscope SSE → Web Audio 流式排队播放；首块 >3s 或 fetch 失败发 `tts_failed` 上报；段首 15ms fade-in；起步 warmup |
+| `src/display/web_static/index.html` | 引入 `tts_direct.js?v=4`，所有脚本加 `?v=N` 缓存破除 |
+| `src/display/web_static/audio_out.js` | **未动**，作为 mp3 fallback 路径保留 |
 
-| 次数 | 首块 | 备注 |
-|---|---|---|
-| 1 | 533 ms | 冷启动 TLS 全握手 |
-| 2 | 484 ms | 升温中 |
-| 3 | **216 ms** | 连接复用生效 |
-| 4 | 291 ms | |
-| 5 | 325 ms | |
-| 6 | 299 ms | |
+#### 3.2 协议（已落地）
 
-**稳态首块 ~283ms**（后 4 次均值）。
-
-**核心发现**：浏览器原生保持 HTTPS 长连接 + HTTP/2 多路复用，省掉每次 TLS 握手 ~200ms。开发板用 httpx 每次新建连接（ffmpeg 子进程模型让复用困难），这是平板直连的根本优势。
-
-**端到端对比**：
-
-| 路径 | 首块 | + 其他 | 端到端首声 |
-|---|---|---|---|
-| 当前（开发板→mp3→平板） | 478ms | ffmpeg 50-100 + WS 推送 10-50 + 平板解码 50 | **590-680 ms** |
-| 平板直连（稳态） | 283ms | Web Audio 启动 60 | **~343 ms** |
-| 平板直连（冷启动最坏） | 533ms | +60 | ~593 ms |
-
-**预期节省 250-340 ms（稳态），最坏情况持平**。
-
-### 3. 顺带确认的事实
-
-- ✅ **CORS 通过**：dashscope 对浏览器开放，无需代理
-- ✅ **Web Audio API 流式播 PCM 工作正常**（PoC 里逐 chunk 创建 BufferSource 排队播放，能听到声）
-- ✅ **HTTP 响应头与首块只差 2-13ms**：服务端边算边返回
-- ✅ **新版火山鉴权方式确认**（见上面）
-
----
-
-## v4 已敲定的 5 个决策
-
-| # | 决策 | 原因 |
-|---|---|---|
-| 1 | API key 写 APK / JS 里（内网信任） | 平板单台、内网部署、APK 不公网下发 |
-| 2 | JS 路径（在 WebView 里 fetch + Web Audio） | 不用 Kotlin。PoC 验证 JS 已够快，CORS 没拦 |
-| 3 | 段级流式保留，打断机制后做 | 段级已是当前架构核心；打断不是核心需求 |
-| 4 | 平板合成失败 → 反馈开发板 → 旧路径兜底（双路径并存） | 离线/限流时不能哑掉 |
-| 5 | 先 PoC 后改造 | 已完成，数据支持改造 |
-
----
-
-## v4 未完成：正式改造方案（下次直接按这个动）
-
-### 改造文件清单
-
-| 文件 | 改动 | 工作量 |
-|---|---|---|
-| `src/protocols/local_agent_protocol.py` | `_tts_sink_one_segment` 按 `TTS.tablet_direct` 分发：true 推 `{type:"tts_text"}`，false 走旧 mp3 路径 | 中 |
-| `src/display/web_static/tts_direct.js`（新建） | 复用 `tts_poc.js` 核心逻辑：监听 WS `tts_text` → fetch dashscope → Web Audio 流式播放 | 中 |
-| `src/display/web_static/audio_out.js` | 保留旧 mp3 播放路径（fallback 用），不动逻辑 | 0 |
-| `src/display/web_static/index.html` | 引入 `tts_direct.js` | 小 |
-| `src/display/web_server.py` | WS 通道增加新消息类型 `tts_text` 的下行 + `tts_failed` 上行 | 中 |
-| `config/config.json` | `TTS.tablet_direct: true` 开关；`TTS.tablet_api_key` 单独存（避免和后端 key 混淆，将来可不同） | 小 |
-
-**总工作量：约半天。**
-
-### 协议字段（草案）
-
-**开发板 → 平板**（替代当前的 mp3 二进制帧）：
-
+**开发板 → 平板**（在 `/ws/audio_out` 上发 JSON 文本帧，与 mp3 二进制帧共享同一通道）：
 ```json
-{
-  "type": "tts_text",
-  "segment_id": 7,           // 段序号，平板按序号排队播放
-  "text": "你好呀，欢迎使用",
-  "voice": "Cherry",          // 开发板下发，将来换音色不用改 APK
-  "is_final": false           // true 表示这一轮 LLM 回复的最后一段
-}
+{"type":"tts_text", "segment_id":7, "text":"你好呀，欢迎使用", "voice":"Cherry"}
 ```
 
-**平板 → 开发板**（合成失败时反馈，触发 fallback）：
-
+**平板 → 开发板**（在同通道发 JSON 文本帧）：
 ```json
-{
-  "type": "tts_failed",
-  "segment_id": 7,
-  "reason": "fetch_error|http_5xx|cors|timeout",
-  "text": "你好呀，欢迎使用"   // 回传文本，开发板拿去走旧路径补合成
-}
+{"type":"tts_failed", "segment_id":7, "reason":"fetch_error|http_5xx|timeout", "text":"你好呀，欢迎使用"}
 ```
 
-### Fallback 机制（决策 4）
+#### 3.3 fallback 机制（已实施）
 
-**触发条件**（平板侧任一）：
-- `fetch` 抛 TypeError（CORS / 断网）
-- HTTP 状态码 ≥ 500
-- 首块超时 > 3s（保护性 timeout）
+- 平板上报 `tts_failed` → 开发板用 `text` 字段直接走旧 mp3 路径合成 → `broadcast_audio_out` 二进制 → `audio_out.js` 播
+- 同段不重试两次（`_tablet_failed_handled` set）
+- 连续 3 段失败 → 本轮对话剩余段降级走 mp3 旧路径；下轮 `_reset_tablet_session_state` 自动恢复尝试
 
-**触发动作**：
-1. 平板立即发 `tts_failed` 给开发板
-2. 开发板收到后，对该 `segment_id` 走旧路径：调 qwen-tts → ffmpeg → 推 mp3 给平板
-3. 平板 `audio_out.js`（旧逻辑保留）正常播放该 mp3
-4. **同段不重试两次**（避免循环）
+### 4. 双预热（已落地，效果验证过）
 
-**冷却保护**：连续 3 段都 `tts_failed` → 开发板临时把 `tablet_direct` 关掉走完整段对话，下次对话再尝试（防止平板已离线还狂尝试浪费时间）。
+#### 4.1 后端 LLM 预热
 
-### 段级流式逻辑（决策 3）
+- `_kick_llm_fast_warmup()` 在 `listen.start` 时跑一发 1 token 的 qwen-flash chat completion，把 TLS+连接池热好
+- 4s 内合并防重复
+- 实测：第一次冷启动握手 1056ms，后续连接池保持 150-340ms
 
-平板侧维护一个 segment 队列：
-- 收到 `tts_text` 立即开始 fetch（多段并发起 fetch，让网络层 pipeline）
-- 但**播放时**按 `segment_id` 顺序：第 N 段没到首块前不开始第 N+1 段的播放
-- Web Audio 的 `nextStartTime` 机制保证段内 PCM 拼接平滑（已在 PoC 验证）
+#### 4.2 平板侧 fetch 预热
 
-### 打断机制（决策 3：后做）
+- `tts_direct.js` 的 `warmupFetch()` 在 WS onopen 时空跑一发 dashscope SSE，读到首块就 abort
+- 浏览器维护 HTTP/2 长连接，后续真合成走同一通道
+- `warmupDone` 守卫，每个 WS 连接生命周期内只热一次
 
-不在本期改造范围。后续做时只需：
-- 开发板下发 `{type: "tts_cancel"}`
-- 平板侧 abort 所有未完成 fetch + 停止 AudioContext + 清空 segment 队列
+### 5. 段首爆破音修复
+
+- `tts_direct.js.playPcmChunk(pcmU8, fadeIn)`，每段第一个 chunk 加 15ms 线性渐入（`SAMPLE_RATE * 0.015 = 360` 样本）
+- 与 v3 后端 qwen_tts_client 的 fade-in 等价，但放在了平板侧
 
 ---
 
-## 当前性能基线（开发板实测，2026-04-29）
+## 当前性能基线（2026-05-02 实测）
 
-参考 `background02.md`：STT→出声 **1554 ms**（Tier 1 路径，qwen-tts，首段 28-32 字）。
+**端到端首声 = 松开按钮 → 平板听到第一声**
 
-预期 v4 改造完成后：**1554 - 250~340 ≈ 1210-1300 ms**。
+### v4 + 云端 STT（qwen3-asr-flash）—— 当前线上配置
+
+回滚 paraformer 流式后的稳态实测（2026-05-02 15:10）：
+
+| 轮次 | 音频时长 | STT | LLM Tier1 总 | TTS 推送 | 后端总 | + 平板 fetch | **端到端首声** |
+|---|---|---|---|---|---|---|---|
+| 1 | 1.85s | 688ms | 490ms | 0ms | 1178ms | ~283ms | **~1.46s** |
+| 2 | 2.08s | 555ms | 403ms | 0ms | 958ms | ~283ms | **~1.24s** |
+| 3 | 1.98s | 464ms | 478ms | 0ms | 942ms | ~283ms | **~1.23s** |
+
+**稳态 ~1.23-1.24s**，连接池热起来后比首次切换（1.36-1.51s）再快 100-200ms。
+准确率正常（"你叫什么名字呀？"/"你有哪些功能呢？"），简繁混淆问题彻底消失。
+
+### 早期实测（仅供参考）
+
+| 阶段 | STT | Tier1 | 端到端首声 | 备注 |
+|---|---|---|---|---|
+| qwen-asr 刚切换（14:27） | 573-720ms | 499-557ms | 1.36-1.51s | 连接池冷 |
+| paraformer 流式（15:05） | 1274-1518ms | 351-404ms | ~2.0s | **慢于批量**，已回滚 |
+
+**对比 v4 whisper base 基线（旧）**：稳态 1.23-1.24s vs 1.60s，**降 ~360ms**。
+**更大的收益在准确率**：实测全对（"你叫什么名字呀？" / "你有哪些功能呢？" / "你好呀"），whisper base 之前的简繁混淆（"你有什麼功能" / "尼海亞尼亞"）彻底消失。
+
+**当前耗时占比**（稳态平均）：
+- STT（qwen-asr POST→响应）：~46% ← **依然最大头**
+- LLM Tier1（POST + 流式拿够字）：~40%
+- TTS push：0%
+- 平板 fetch dashscope 首块：~22%
+
+### v4 whisper base（旧基线，仅留作对比）
+
+| 轮次 | STT | LLM Tier1 | 后端总 | 端到端首声 |
+|---|---|---|---|---|
+| 1（冷） | 798ms | 829ms | 1632ms | ~1.91s |
+| 2（稳态） | 656ms | 662ms | 1319ms | ~1.60s |
 
 ---
 
-## 改造之前要做的准备
+## 下一步要做的事（按性价比排序）
+
+### P0 — 已完成：云端 STT 切换到 qwen3-asr-flash
+
+**结论**：保留。准确率明显更好（简繁混淆消失），延迟从 656ms→573-684ms 略降，端到端从 1.60s→1.36-1.51s。
+**踩坑记录**：
+- `QwenASRSTT` 一开始没实现 `transcribe_pcm`，平板麦克风走 PCM 路径直接被静默跳过（`WARNING - 当前 STT provider 不支持 transcribe_pcm`），已补上 `_sync_transcribe_pcm` 复用 `_transcribe_wav_bytes`
+- segment_id 在开发板进程级累加，平板刷页面后 `nextPlayId=0` 永远等不到 N 号段死锁；改 `tts_direct.js` 让前端跟随后端的第一个段 id 作为起点（`?v=5`）
+
+### P0' — 流式 STT（paraformer-realtime） — **已实施，已回滚**
+
+**实测结果**（2026-05-02）：
+| 模型 | STT 平均耗时 | vs 批量 |
+|---|---|---|
+| qwen3-asr-flash 批量 | ~660ms | 基线 |
+| paraformer-realtime-v2 流式 | **~1361ms** | **慢 700ms** |
+
+**为什么流式反而更慢**：paraformer-realtime 的"实时"是指识别过程实时，但**finalize 有 ~1s 内置延迟**——服务端收到 finish-task 后还要跑标点预测/句末检测/反向文本规整等后处理。短句（<3s）这部分尾延迟比批量的整段处理还慢。
+
+**流式只在长句（>5s）才有优势**。本项目语音对话基本都是短指令，不适用。
+
+**当前状态**：`STT.streaming_enabled: false`，跑批量 qwen3-asr-flash。流式代码保留作未来长句场景的可选项。
+
+**实现保留**：
+- `src/stt/qwen_stream_stt.py` — paraformer-realtime-v2 WebSocket duplex 客户端
+- `local_agent_protocol.py` — `_kick_stream_stt_start` / 缓冲始终保留作 fallback / catchup cursor 防丢帧
+- 流式失败/超时自动降级批量
+
+**给后续的人**：不要为短指令场景重新打开 streaming_enabled；除非业务场景变成长句口述，才值得评估。
+
+### P1 — Tier1 启动延迟微调
+
+LLM 响应到推 TTS 之间有 144-184ms（`ROUTER.fallback_scan_chars: 30` 的扫描期）。降到 15 大概省 80-100ms，代价是 fallback 短语只在前 15 字内有效。**先不动，等 STT 切完再看是否还有必要**。
+
+### P2 — Tier 2 直达关键词词表
+
+`config.ROUTER.tier2_keywords` 当前空 list；如果实测发现 Tier 1 误判走了 Tier 2 fallback 频繁，可以加几个关键词直达。
+
+### P3 — 常态化 ROS Bridge
+
+`subprocess.Popen` → 主进程驻留 publisher 单例（mapping.view 走 ROS 时每次起进程的开销）。
+
+### P4 — 段间接缝感
+
+已用 fade-in 解决主要爆音（v3 后端 + v4 平板侧），如果用户后续仍觉接缝明显再做。
+
+### P5 — 打断机制
+
+不在本期。后续：开发板下发 `{type:"tts_cancel"}` → 平板 abort fetch + 停 AudioContext + 清队列。
+
+---
+
+## 已敲定的决策（v3+v4 总集）
+
+| # | 决策 | 状态 |
+|---|---|---|
+| 1 | API key 写 APK / JS 里（内网信任） | 已落地，dashscope key 写在 `tts_direct.js` |
+| 2 | JS 路径（WebView 里 fetch + Web Audio） | 已落地 |
+| 3 | 段级流式保留，打断后做 | 已落地，打断未做 |
+| 4 | 平板合成失败 → 反馈开发板 → 旧路径兜底 | 已落地 |
+| 5 | 先 PoC 后改造 | 已完成 |
+| 6 | qwen-flash 在 listen.start 时主动预热 | 已落地（v4 新增） |
+| 7 | 平板侧 fetch 在 WS onopen 时主动预热 | 已落地（v4 新增） |
+| 8 | 段首 15ms fade-in 在平板侧做，不在后端 | 已落地（v4 新增） |
+| 9 | 静态资源加 `?v=N`、HTML 加 no-cache 头 | 已落地（v4 新增），防 WebView 缓存旧版 |
+
+---
+
+## 协议字段（已落地）
+
+**开发板 → 平板**（`/ws/audio_out` 文本帧）：
+```json
+{"type":"tts_text", "segment_id":<int>, "text":"...", "voice":"Cherry"}
+```
+
+**平板 → 开发板**（`/ws/audio_out` 文本帧）：
+```json
+{"type":"tts_failed", "segment_id":<int>, "reason":"fetch_error|http_4xx|http_5xx|timeout", "text":"..."}
+```
+
+**fallback 触发条件**（平板侧任一）：
+- `fetch` 抛 TypeError（CORS / 断网）→ `fetch_error`
+- HTTP ≥ 500 → `http_5xx`；其他非 200 → `http_<status>`
+- 首块超时 > 3000ms → `timeout`
+
+---
+
+## 安全 / 准备工作（v4 改造前已写，仍待做）
 
 1. **轮换 API key**：当前 dashscope key（`sk-4529e46f796b46539ba4307d5d4fe5c2`）已在多个测试脚本里硬编码且对话曝光过，正式部署前去 dashscope 控制台换新 key
-2. **决定平板用的 key 是否和开发板分开**：建议分开，方便单独限额/审计
+2. **决定平板 key 是否和开发板分开**：当前 `TTS.tablet_api_key` 是独立字段（已预留），但值与后端相同。建议正式部署时分开，方便单独限额 / 审计
 
 ---
 
@@ -185,32 +236,13 @@ PoC 文件（**保留勿删，作回归测试用**）：
 
 ---
 
-## v4 之后的待办（继承 + 新增）
+## 协作约定（沿用）
 
-### P0（本期改造完成后再看）
-- 平板直连 TTS 正式落地（**本文档主线**）
-
-### P1
-- 切豆包 TTS：**本期已评估，否决**
-- Tier 2 直达关键词词表（当前空 list）
-- 常态化 ROS Bridge（`subprocess.Popen` → 主进程驻留 publisher 单例）
-
-### P2
-- STT 首字延迟（base→tiny / GPU / streaming whisper）
-- 段间接缝感（已用 fade-in 解决主要爆音，如果用户后续仍觉接缝明显再做）
-
-### P3
-- 带参数关键词（"音量调到 70"）
-- 打断机制（决策 3 推迟项）
-
----
-
-## 协作约定（沿用 v3）
-
-- PC 上不跑项目代码，syncpi 到开发板再测
+- PC 上不跑项目代码，syncpi 到开发板再测；PC 允许做静态语法/JSON 校验
 - 改动前先讨论方案，避免大刀阔斧改完才发现方向不对
 - 改完代码后等用户实测日志反馈，再决定下一步
 - **平板 UI 改动改 `src/display/web_static/` 下的 JS 即可，APK 通常不动**
+- 改 JS 后注意更新 `index.html` 里 `?v=N` 数字，避免 WebView 缓存旧版
 
 ---
 
@@ -218,8 +250,8 @@ PoC 文件（**保留勿删，作回归测试用**）：
 
 - `background01.md` — v2（三层路由架构落地）
 - `background02.md` — v3（edge-tts→qwen-tts + 段爆音修复）
-- **`background03.md` — 本文档（v4 平板直连 PoC + 改造方案）**
-- `FIRST_RESPONSE_LATENCY.md` — 早期方案分析（场景 A/B 对比，部分已落地）
+- **`background03.md` — 本文档（v4 平板直连改造已落地 + 双预热）**
+- `FIRST_RESPONSE_LATENCY.md` — 早期方案分析
 - `SLAM_WEB_VIEWER_DESIGN.md` — SLAM 模块设计
 
 ---
@@ -229,27 +261,32 @@ PoC 文件（**保留勿删，作回归测试用**）：
 ```
 项目根: /home/kian/kian_project/aiagent
 
-后端 TTS:
-  src/tts/qwen_tts_client.py              ← qwen-tts 流式客户端（首块埋点 line 204-232）
-  src/protocols/local_agent_protocol.py    ← _tts_sink_one_segment 段级推送
-  src/display/web_server.py                ← FastAPI + WS（改造要在这里加 tts_text 通道）
+后端 TTS / 协议:
+  src/tts/qwen_tts_client.py              ← qwen-tts 流式客户端（fallback mp3 路径用）
+  src/protocols/local_agent_protocol.py    ← _tts_sink_one_segment / on_tablet_audio_out_text / _kick_llm_fast_warmup
+  src/display/web_server.py                ← /ws/audio_out 双向 + broadcast_audio_out_text
+  src/display/web_display.py               ← WebDisplay 透传层
 
 平板 UI（开发板托管，平板 WebView 加载）:
-  src/display/web_static/index.html        ← 主页面
-  src/display/web_static/audio_out.js      ← 当前 mp3 播放（fallback 路径）
-  src/display/web_static/tts_poc.html      ← PoC 测试页
-  src/display/web_static/tts_poc.js        ← PoC 核心逻辑（直接复用进 tts_direct.js）
+  src/display/web_static/index.html        ← 主页面（脚本带 ?v=N）
+  src/display/web_static/audio_out.js      ← 旧 mp3 fallback 路径
+  src/display/web_static/tts_direct.js     ← v4 新增：tts_text → 直连 dashscope
+  src/display/web_static/tts_poc.html / tts_poc.js  ← 回归测试 PoC
 
-平板 APK（极少改动）:
+平板 APK（v4 未动，验证证明无需改）:
   android_webview/app/src/main/java/com/kian/aiagent/MainActivity.kt
   android_webview/app/src/main/java/com/kian/aiagent/AudioBridge.kt
 
-测试脚本:
-  scripts/qwen_tts_latency_test.py
-  scripts/volcano_tts_latency_test.py
+STT（下一步重点）:
+  src/stt/whisper_stt.py                   ← 当前默认（base / CPU / int8）
+  src/stt/qwen_asr_stt.py                  ← 已实现的 qwen-asr 客户端，未启用
 
 配置:
-  config/config.json                        ← TTS.provider / dashscope_api_key
+  config/config.json
+    TTS.provider: "qwen"
+    TTS.tablet_direct: true                ← 主开关，false 即回退旧路径
+    TTS.tablet_api_key: "..."
+    STT.provider: "whisper"                ← 改成 "qwen" 即切云端 STT（下一步要做）
 ```
 
 ---
@@ -257,8 +294,13 @@ PoC 文件（**保留勿删，作回归测试用**）：
 ## 给下一个 Claude 的话
 
 接力建议：
-1. 先看本文档"v4 已敲定的 5 个决策"和"未完成：正式改造方案"
-2. 数据基线用本文档的 PoC 数字（283ms 稳态首块）
-3. 改造按"改造文件清单"顺序：先改协议（local_agent_protocol + web_server），再写 tts_direct.js（直接复用 tts_poc.js 核心），最后接 fallback
-4. 改造完成后用 PoC 页面做回归对比（数字应该一致）
-5. **不要重测豆包**（本期已否决，结论别再翻）
+
+1. **当前状态**：v4 平板直连 TTS + 双预热 + 段首 fade-in + qwen3-asr-flash 云 STT **全部已落地实测**，端到端首声稳态 ~1.23-1.24s（连接池热起来后），准确率明显改善
+2. **paraformer 流式 STT 已实测、已否决** —— 短句场景下比批量慢 700ms（finalize 有 ~1s 内置延迟）。代码保留，开关默认关闭，不要无视实测数据重新打开。
+3. 不要重测豆包 TTS（v4 已否决）
+4. 不要碰 `tts_poc.html` / `tts_poc.js`（保留作回归对比）
+5. PC 上允许静态语法校验（`python3 -c "import ast"`、`node --check`、`json.load`），不要尝试启动项目；运行实测让用户在开发板上做
+6. 改 web_static 下的 JS 后记得更新 `index.html` 里的 `?v=N`，否则 WebView 会跑旧版（已踩过坑）
+7. 当前 dashscope API key 已多次曝光，正式部署前用户需要轮换；这件事要在适当时候提醒
+8. **段 id 协议契约**：开发板 `_tablet_segment_id` 进程级累加，从不归零；平板 `tts_direct.js` 跟随第一个收到的 id 作为播放起点。改任一侧前先理解这个契约，否则会回到死锁。
+9. **STT.transcribe_pcm 是必需接口**：平板麦克风走 PCM 不走 opus，新增 STT provider 时务必实现 `transcribe_pcm(pcm_bytes)`，否则会被 protocol 静默跳过

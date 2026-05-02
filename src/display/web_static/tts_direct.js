@@ -23,8 +23,10 @@
 
   // 段级队列：保证按 segment_id 顺序播放
   // entry: { id, text, voice, ready: Promise<Uint8Array[]>, played: bool, failed: bool }
+  // nextPlayId 跟随后端：收到的第一个段就是起点，避免开发板进程不重启 + 平板刷页面
+  // 导致 id 错位（后端累加到 N，平板从 0 等，永远死锁）
   const segments = new Map();
-  let nextPlayId = 0;
+  let nextPlayId = null;
 
   function log() {
     try { console.log.apply(console, ['[tts_direct]'].concat([].slice.call(arguments))); } catch (_) {}
@@ -229,6 +231,10 @@
     if (typeof id !== 'number') {
       log('tts_text 缺少 segment_id', msg);
       return;
+    }
+    if (nextPlayId === null) {
+      nextPlayId = id;
+      log('对齐起始段 id=', id);
     }
     if (segments.has(id) || id < nextPlayId) {
       log('忽略重复或过期段 id=', id);
