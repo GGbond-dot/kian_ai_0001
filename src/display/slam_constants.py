@@ -17,8 +17,8 @@ SLAM_TOPIC_PATH = "/a/path"                        # nav_msgs/Path — 历史轨
 SLAM_FIXED_FRAME = "a/camera_init"
 
 # ===================== 降采样参数 =====================
-SLAM_MAP_VOXEL_SIZE = 0.03   # 累积地图：3cm
-SLAM_SCAN_VOXEL_SIZE = 0.05  # 实时 scan：5cm
+SLAM_MAP_VOXEL_SIZE = 0.02   # 累积地图：2cm
+SLAM_SCAN_VOXEL_SIZE = 0.03  # 实时 scan：3cm
 
 # ===================== 推送频率 (Hz) =====================
 # 实际由 ROS topic 自然驱动；这些是节流上限

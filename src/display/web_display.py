@@ -10,6 +10,7 @@ from typing import Callable, Optional
 from src.display.base_display import BaseDisplay
 from src.display.slam_bridge import SlamBridge
 from src.display.web_server import WebServer
+from src.ros.drone_command_bridge import get_drone_command_bridge
 
 
 class WebDisplay(BaseDisplay):
@@ -19,6 +20,7 @@ class WebDisplay(BaseDisplay):
         super().__init__()
         self.server = WebServer(host, port)
         self.slam_bridge = SlamBridge(self.server)
+        self.drone_bridge = get_drone_command_bridge()
 
         # 自动模式状态
         self.auto_mode = False
@@ -98,11 +100,13 @@ class WebDisplay(BaseDisplay):
         """启动 Web 服务器 (会阻塞直到服务器关闭)."""
         self.logger.info("WebDisplay 启动中...")
         await self.slam_bridge.start()
+        await self.drone_bridge.start()
         await self.server.start()
 
     async def close(self):
         """关闭 Web 服务器."""
         self.logger.info("WebDisplay 关闭中...")
+        await self.drone_bridge.stop()
         await self.slam_bridge.stop()
         await self.server.stop()
 

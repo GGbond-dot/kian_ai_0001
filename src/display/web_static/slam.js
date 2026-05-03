@@ -39,7 +39,7 @@ const mapGeom = new THREE.BufferGeometry();
 mapGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
 mapGeom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(0), 3));
 const mapMat = new THREE.PointsMaterial({
-  size: 0.08, vertexColors: true, sizeAttenuation: true,
+  size: 0.07, vertexColors: true, sizeAttenuation: true,
 });
 const mapPoints = new THREE.Points(mapGeom, mapMat);
 scene.add(mapPoints);
@@ -48,10 +48,16 @@ scene.add(mapPoints);
 const scanGeom = new THREE.BufferGeometry();
 scanGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
 const scanMat = new THREE.PointsMaterial({
-  size: 0.10, color: 0xffaa33, sizeAttenuation: true,
+  size: 0.07, color: 0xffaa33, sizeAttenuation: true,
 });
 const scanPoints = new THREE.Points(scanGeom, scanMat);
 scene.add(scanPoints);
+
+// scan 滑动窗口: 累积最近 SCAN_WINDOW_FRAMES 帧叠加显示,
+// 让 5Hz 推送在视觉上不闪烁,且密度 ≈ 单帧 × N (带宽不变)
+// 5Hz × 5s = 25 帧;若觉得拖影太长改小,觉得稀疏改大
+const SCAN_WINDOW_FRAMES = 25;
+const scanFrames = [];
 
 // ===== Path =====
 const pathGeom = new THREE.BufferGeometry();
@@ -93,7 +99,7 @@ function onBinary(buf) {
 
   switch (channel) {
     case CHAN.MAP:  return updatePoints(buf, mapGeom, true);
-    case CHAN.SCAN: return updatePoints(buf, scanGeom, false);
+    case CHAN.SCAN: return updateScanWindow(buf);
     case CHAN.ODOM: return updateOdom(dv);
     case CHAN.PATH: return updatePath(buf);
   }
@@ -121,6 +127,25 @@ function updatePoints(buf, geom, withColor) {
     statScan.textContent = `实时点: ${n.toLocaleString()}`;
   }
   geom.computeBoundingSphere();
+}
+
+function updateScanWindow(buf) {
+  const dv = new DataView(buf);
+  const n = dv.getUint32(1, true);
+  const xyz = new Float32Array(buf.slice(5, 5 + n * 12));
+
+  scanFrames.push(xyz);
+  if (scanFrames.length > SCAN_WINDOW_FRAMES) scanFrames.shift();
+
+  let total = 0;
+  for (const f of scanFrames) total += f.length;
+  const merged = new Float32Array(total);
+  let off = 0;
+  for (const f of scanFrames) { merged.set(f, off); off += f.length; }
+
+  scanGeom.setAttribute('position', new THREE.BufferAttribute(merged, 3));
+  scanGeom.computeBoundingSphere();
+  statScan.textContent = `实时点: ${(merged.length / 3).toLocaleString()} (${scanFrames.length}帧窗口)`;
 }
 
 function updateOdom(dv) {

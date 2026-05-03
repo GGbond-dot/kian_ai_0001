@@ -189,7 +189,8 @@ class SlamBridge:
             depth=5,
         )
 
-        rclpy.init(args=None)
+        if not rclpy.ok():
+            rclpy.init(args=None)
         node = Node("aiagent_slam_bridge")
 
         def on_map(msg: PointCloud2):

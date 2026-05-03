@@ -1,7 +1,13 @@
 import argparse
 import asyncio
+import os
 import signal
 import sys
+
+# ROS2 通信环境变量（与开发板飞控同域）
+# 必须在 import rclpy 之前 setdefault，否则进程 init 后修改无效
+os.environ.setdefault("ROS_DOMAIN_ID", "10")
+os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
 
 from src.application import Application
 from src.utils.logging_config import get_logger, setup_logging
