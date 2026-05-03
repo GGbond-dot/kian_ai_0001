@@ -1,0 +1,1 @@
+import{_ as i,o as a,c as e,ae as l}from"./chunks/framework.CF3ehLaw.js";const r=JSON.parse('{"title":"aiagent","description":"","frontmatter":{},"headers":[],"relativePath":"README.md","filePath":"README.md"}'),t={name:"README.md"};function n(p,s,h,o,d,c){return a(),e("div",null,[...s[0]||(s[0]=[l("",99)])])}const F=i(t,[["render",n]]);export{r as __pageData,F as default};
