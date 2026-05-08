@@ -275,3 +275,37 @@ os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
 8. **当前 dashscope API key 已多次曝光**(沿用 background03 安全清单),正式部署前用户要轮换。
 9. **段 id 协议契约 / `transcribe_pcm` 必需接口**(背景03)在场景 B 不涉及,但仍然适用于其他改动。
 10. ROS env 用 `os.environ.setdefault` 在 main.py 顶部固定,**保留命令行 export 覆盖能力**。不要改成直接赋值。
+
+---
+
+## 追加 — SLAM 点云视觉调参(2026-05-03)
+
+与场景 B 主线无关,纯 `/slam` 平板前端观感优化。**不改 SLAM、不改 bridge、不动协议**。
+
+### 问题
+- 平板看点云**稀疏**
+- scan **闪烁**(5Hz 替换太快)
+
+### 方案分析(关键决策)
+- 累积无限叠加 → 人走过留鬼影,**否决**
+- 纯替换 → 闪烁 + 稀疏,**就是现状**
+- **方案 D 前端滑动窗口**:bridge 一帧不变,前端累积最近 N 帧叠加显示。带宽零增长,鬼影 N×(1/Hz) 秒后自动清
+
+### 实施
+| 文件 | 改动 |
+|---|---|
+| `src/display/web_static/slam.js` | 新增 `SCAN_WINDOW_FRAMES=25`(5Hz×5s)+ `scanFrames` ring + `updateScanWindow()` 合并所有窗口帧重建 position attribute |
+| `src/display/web_static/slam.js` | map / scan 点 size 最终定 **0.07**(试过 0.06 略细、0.08 太粗) |
+| `src/display/slam_constants.py` | `SLAM_MAP_VOXEL_SIZE` 0.03→0.02,`SLAM_SCAN_VOXEL_SIZE` 0.05→0.03(密度 ~3-4×) |
+
+### 带宽估算(单机)
+- scan 5Hz × ~5000 点 × 16B ≈ 3.2 Mbps,voxel 调小后 ≈ 12-15 Mbps
+- 5G WiFi 路由器舒适区(<20 Mbps),对其他设备无感
+- **3 机扩展时**:线性 ×3 ≈ 30-45 Mbps,2.4G 或老路由会挤占空中时间。届时把 `SLAM_SCAN_MAX_HZ` 从 5 降到 2 即可压回
+
+### 给后续的人
+1. 想再调密度:**优先动 voxel,不要再加大 size**(粗了糊)
+2. 觉得拖影长了:`SCAN_WINDOW_FRAMES` 调小(15 ≈ 3s)
+3. **滑动窗口在前端,bridge 完全不知道**。如果未来要改持续时长协议,别在 bridge 找,在 slam.js
+4. **3 机部署时再考虑**:差分 map(只发新增体素)、map 节流降到 0.5Hz、Map voxel 加大、必要时开发板插网线
+5. 本次未实测的:voxel 调小后实际带宽数(估算)、3 机场景(没现场)

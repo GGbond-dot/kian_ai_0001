@@ -584,3 +584,38 @@ health check / 重启流程
 ROS2 发现问题的排查顺序
 ```
 
+---
+
+# 7. 长版面试回答补充：subprocess 到常驻 ROS2 bridge
+
+如果面试官问我 `subprocess + ROS2 常驻 bridge` 这段，我会这样展开：
+
+> 在我的项目中，AI 主程序负责 PyQt5 GUI、asyncio 异步任务和 Agent 调度；ROS2 控制层是独立的机器人控制侧，通过 bridge 与主程序连接。这里早期引发了三方冲突，也就是 PyQt、asyncio 和 rclpy 三个事件循环之间的冲突。
+>
+> 事件循环可以理解成一个长期运行的调度器。如果把 `app.exec()`、`asyncio.run()`、`rclpy.spin()` 这种阻塞式主循环粗暴放在同一个主线程里，谁先进入循环，谁就会长期占据当前线程控制权，导致其他事件循环无法继续调度。
+>
+> 多线程是可行方案，但我没有优先选它。Python 的 GIL 让多线程对 CPU 密集场景没有真正并行能力，不过 rclpy spin 大部分时间在等 DDS IO，GIL 会释放，这块影响相对小。真正的硬伤是 Qt 的线程模型：所有 GUI 控件必须在主线程操作，子线程收到 ROS 回调后如果要更新界面，必须通过 signal/slot 切回主线程，代码维护成本比较高。
+>
+> 后面我想到用 qasync 解决 Qt 和 asyncio 两个事件循环的冲突。qasync 的作用是把 asyncio 的协程调度接到 Qt 事件循环上，让 PyQt 和 asyncio 在同一个主线程中协作运行；但它不能直接接管 `rclpy.spin()`，因为 rclpy 不是 asyncio coroutine。所以 rclpy 的事件循环冲突仍然没有解决。
+>
+> 在这个基础上，我引入了 subprocess：把 ROS2 程序封装成独立脚本，在主程序里通过 subprocess 调用它。subprocess 和 import 看起来都能复用外部代码，但本质完全不同。subprocess 是创建新的进程去执行外部脚本；import 是在原进程里加载模块并调用函数。import 本质上不能解决事件循环冲突，因为 rclpy 仍然会进入同一个进程的调度空间；subprocess 则实现了进程级隔离。
+>
+> 这是我早期的方案，但很快发现了新的问题：subprocess 每次启动都要经历一整套流程，导致延迟很长。首先有 `fork + exec` 的开销。现代 Linux 的 COW 一定程度上优化了 fork 阶段，COW 全称是 copy-on-write，意思是系统在 fork 后先不直接复制整个内存，而是把父进程内存页标记为只读，只有当父进程或子进程写某个共享页面时，才触发写保护异常，由内核复制对应的物理页。所以 fork 这一段通常不是最大瓶颈，但 exec 之后仍然要加载新的 Python 程序。
+>
+> 更明显的开销来自 Python 解释器加载、rclpy 加载、ROS2 节点初始化、DDS discovery 和 endpoint 匹配。每次 subprocess 执行业务之前都要先经历一遍这些消耗，真正的 publish 反而不是主要耗时点。
+>
+> 后面我就想，能不能只提前运行一次这些启动和加载，后续复用已经初始化好的 ROS2 runtime？这样就能省下大量重复成本。这就是常驻 bridge + IPC 方案的来源。
+>
+> 常驻 bridge 的思路是把 ROS2 bridge 做成长期运行的独立进程，启动时初始化一次 rclpy、node、publisher/action client，后续主程序通过 IPC 给它发命令。bridge 只负责高层离散命令的受控转发，不承担 100Hz 姿态控制、速度闭环、避障闭环等实时控制。这些实时控制必须下沉到 ROS2 控制节点或飞控层。
+>
+> 在 bridge 里我不会开放任意 topic 调用，而是做白名单命令映射。因为 LLM 输出具有不确定性，不能让它直接控制任意 ROS2 topic 或 payload。Agent 只输出高层意图，比如起飞、停止、执行任务，bridge 负责参数校验，并映射到底层固定 topic、service 或 action。
+>
+> IPC 我选择 UDS，也就是 Unix Domain Socket。原因是主程序和 ROS2 bridge 都在同一台设备上通信，UDS 做本机通信很方便，不需要管理 TCP 端口，还可以通过 socket 文件权限控制访问范围。没有优先用 TCP，是因为 TCP 需要管理端口，同机通信也比 UDS 多一层网络协议栈开销。当然，如果后续主进程和 ROS2 bridge 不在同一台设备上，我会考虑切到 TCP。
+>
+> 我也没有选择共享内存，因为共享内存主要适合处理点云、视频帧、大数组这类大数据。当前我要处理的是起飞、降落、悬停这类小命令，瓶颈不在数据拷贝。共享内存还要处理锁、同步、消息边界和异常恢复，开发成本更高，所以当前不考虑。
+>
+> UDS 还有一个优势是可观测性比较好，调试时可以用 `strace` 等工具观察通信行为，排查起来比较直接。
+>
+> 常驻进程还需要生命周期管理。主程序通过 `Popen` 保存 bridge 进程对象，用 `proc.poll()` 判断进程是否退出；同时通过 UDS 发送 `ping/health` 做应用层检查。如果进程退出或 ping 超时，就标记 bridge unavailable，暂停新的控制命令，`terminate/kill` 旧进程，清理 socket 文件，再重新拉起 bridge。恢复期间，底层控制节点或飞控必须有 failsafe，比如悬停、停止或降落。
+>
+> 优化效果我会通过 A/B 测试验证：subprocess 版连续发 N 条命令，统计平均延迟、P95、最大值和失败率；常驻 bridge 预热并 health ready 后，同样连续发 N 条 UDS 命令，统计 IPC round-trip。同时在一次性脚本内部用 `time.perf_counter()` 分段测 `import rclpy`、`rclpy.init()`、create node/publisher、publish 的耗时。这样可以证明延迟到底来自哪里，也能量化常驻 bridge 的收益。
