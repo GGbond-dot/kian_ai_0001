@@ -24,9 +24,6 @@ if [[ -z "${ROS2_HUMBLE_HOST_WS:-}" && -d "${DEFAULT_WORKSPACE_PATH}" ]]; then
 else
   export ROS2_HUMBLE_HOST_WS="${ROS2_HUMBLE_HOST_WS:-/home/orangepi/ros2_ws}"
 fi
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-10}"
-export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
-export ROS_AUTOMATIC_DISCOVERY_RANGE="${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}"
 export AIAGENT_MODE="${AIAGENT_MODE:-cli}"
 export AIAGENT_PROTOCOL="${AIAGENT_PROTOCOL:-local}"
 
@@ -41,6 +38,11 @@ if [[ -f "${ROS2_HUMBLE_HOST_WS}/install/setup.bash" ]]; then
   # shellcheck disable=SC1090
   source "${ROS2_HUMBLE_HOST_WS}/install/setup.bash"
 fi
+
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-10}"
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+unset CYCLONEDDS_URI
+export ROS_AUTOMATIC_DISCOVERY_RANGE="${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}"
 
 echo "=== AI Agent Action Launch ==="
 echo "ROS2_DISPATCH_TRANSPORT=${ROS2_DISPATCH_TRANSPORT}"

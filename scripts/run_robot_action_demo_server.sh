@@ -16,9 +16,6 @@ export ROS2_PUBLISH_MODE="${ROS2_PUBLISH_MODE:-auto}"
 export ROS2_ACTION_NAME="${ROS2_ACTION_NAME:-/dispatch_order}"
 export ROS2_ACTION_TYPE="${ROS2_ACTION_TYPE:-robot_task_interfaces/action/DispatchOrder}"
 export ROS2_HUMBLE_HOST_WS="${ROS2_HUMBLE_HOST_WS:-${PROJECT_ROOT}/ros2_ws}"
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-10}"
-export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
-export ROS_AUTOMATIC_DISCOVERY_RANGE="${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}"
 
 cd "${PROJECT_ROOT}"
 
@@ -26,6 +23,11 @@ if [[ -f "/opt/ros/humble/setup.bash" ]]; then
   # shellcheck disable=SC1091
   source /opt/ros/humble/setup.bash
 fi
+
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-10}"
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+unset CYCLONEDDS_URI
+export ROS_AUTOMATIC_DISCOVERY_RANGE="${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}"
 
 echo "=== Robot Action Demo Server ==="
 echo "ROS2_ACTION_NAME=${ROS2_ACTION_NAME}"

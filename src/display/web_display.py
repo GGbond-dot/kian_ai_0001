@@ -10,6 +10,7 @@ from typing import Callable, Optional
 from src.display.base_display import BaseDisplay
 from src.display.slam_bridge import SlamBridge
 from src.display.web_server import WebServer
+from src.ros.drone_command_bridge import get_drone_command_bridge
 
 
 class WebDisplay(BaseDisplay):
@@ -19,6 +20,7 @@ class WebDisplay(BaseDisplay):
         super().__init__()
         self.server = WebServer(host, port)
         self.slam_bridge = SlamBridge(self.server)
+        self.drone_bridge = get_drone_command_bridge()
 
         # 自动模式状态
         self.auto_mode = False
@@ -35,6 +37,25 @@ class WebDisplay(BaseDisplay):
 
         # 注册控制指令处理
         self.server.set_command_callback(self._handle_command)
+
+    def set_audio_in_callback(self, callback: Callable) -> None:
+        """注册外部 PCM 流回调（来自平板 WebView 的 /ws/audio_in）。
+
+        callback 签名: async (pcm_bytes: bytes, meta: dict) -> None
+        """
+        self.server.set_audio_in_callback(callback)
+
+    def has_audio_out_listeners(self) -> bool:
+        return self.server.has_audio_out_listeners()
+
+    async def broadcast_audio_out(self, mp3_bytes: bytes) -> int:
+        return await self.server.broadcast_audio_out(mp3_bytes)
+
+    async def broadcast_audio_out_text(self, msg: dict) -> int:
+        return await self.server.broadcast_audio_out_text(msg)
+
+    def set_audio_out_text_callback(self, callback: Callable) -> None:
+        self.server.set_audio_out_text_callback(callback)
 
     async def set_callbacks(
         self,
@@ -79,11 +100,13 @@ class WebDisplay(BaseDisplay):
         """启动 Web 服务器 (会阻塞直到服务器关闭)."""
         self.logger.info("WebDisplay 启动中...")
         await self.slam_bridge.start()
+        await self.drone_bridge.start()
         await self.server.start()
 
     async def close(self):
         """关闭 Web 服务器."""
         self.logger.info("WebDisplay 关闭中...")
+        await self.drone_bridge.stop()
         await self.slam_bridge.stop()
         await self.server.stop()
 

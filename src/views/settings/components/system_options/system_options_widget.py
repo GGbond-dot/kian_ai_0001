@@ -89,6 +89,9 @@ class SystemOptionsWidget(QWidget):
         self.ui_controls.update(
             {
                 "aec_enabled_check": self.findChild(QCheckBox, "aec_enabled_check"),
+                "memory_summary_enabled_check": self.findChild(
+                    QCheckBox, "memory_summary_enabled_check"
+                ),
             }
         )
 
@@ -186,6 +189,14 @@ class SystemOptionsWidget(QWidget):
             # AEC配置
             aec_enabled = self.config_manager.get_config("AEC_OPTIONS.ENABLED", True)
             self._set_check_value("aec_enabled_check", aec_enabled)
+
+            # 记忆摘要配置
+            memory_summary_enabled = self.config_manager.get_config(
+                "MEMORY.summary_enabled", False
+            )
+            self._set_check_value(
+                "memory_summary_enabled_check", memory_summary_enabled
+            )
 
         except Exception as e:
             self.logger.error(f"加载系统选项配置值失败: {e}", exc_info=True)
@@ -320,6 +331,12 @@ class SystemOptionsWidget(QWidget):
             aec_enabled = self._get_check_value("aec_enabled_check")
             config_data["AEC_OPTIONS.ENABLED"] = aec_enabled
 
+            # 记忆摘要配置
+            memory_summary_enabled = self._get_check_value(
+                "memory_summary_enabled_check"
+            )
+            config_data["MEMORY.summary_enabled"] = memory_summary_enabled
+
         except Exception as e:
             self.logger.error(f"获取系统选项配置数据失败: {e}", exc_info=True)
 
@@ -362,6 +379,13 @@ class SystemOptionsWidget(QWidget):
             default_aec = default_config.get("AEC_OPTIONS", {})
             self._set_check_value(
                 "aec_enabled_check", default_aec.get("ENABLED", False)
+            )
+
+            # 记忆摘要配置默认值
+            default_memory = default_config.get("MEMORY", {})
+            self._set_check_value(
+                "memory_summary_enabled_check",
+                default_memory.get("summary_enabled", False),
             )
 
             self.logger.info("系统选项配置已重置为默认值")

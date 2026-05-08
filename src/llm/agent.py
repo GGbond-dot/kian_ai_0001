@@ -11,7 +11,8 @@ System prompt 100% 来自 config.json[LLM.system_prompt]，无任何隐藏注入
 """
 import asyncio
 import json
-from typing import Any, Callable, Dict, List, Optional
+import time
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from src.llm.llm_client import LLMClient
 from src.llm.memory_store import MemoryStore
@@ -183,6 +184,164 @@ class LLMAgent:
         fallback = "抱歉，工具调用轮次超出限制，无法完成请求。"
         self._append_history({"role": "assistant", "content": fallback})
         return fallback
+
+    async def run_streaming(
+        self,
+        user_input: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+    ) -> AsyncIterator[str]:
+        """
+        流式版 Agent 循环：最终文字轮按 token 推 delta；工具调用轮仍走非流式。
+
+        Yields:
+            最终回复的文字片段（增量）。可拼接得到完整 reply。
+        """
+        # responses API 路径暂不支持流式，回退到一次性返回
+        if self.llm_client.uses_responses_api():
+            reply = await self._run_with_responses_api(
+                user_input=user_input, tools=tools, tool_executor=tool_executor
+            )
+            if reply:
+                yield reply
+            return
+
+        self._append_history(
+            {"role": "user", "content": user_input},
+            learn_from_user=True,
+        )
+
+        for round_idx in range(MAX_TOOL_CALL_ROUNDS):
+            messages = self._build_messages()
+
+            t_call = time.perf_counter()
+            try:
+                stream = await self.llm_client.chat_completion(
+                    messages=messages,
+                    tools=tools if tools else None,
+                    stream=True,
+                )
+            except Exception as e:
+                logger.error(f"LLM 流式请求失败（第 {round_idx + 1} 轮）：{e}")
+                error_msg = f"抱歉，LLM 请求出现错误：{e}"
+                self._append_history({"role": "assistant", "content": error_msg})
+                yield error_msg
+                return
+
+            # 一轮内的累加状态
+            text_buf: List[str] = []
+            tool_calls_acc: Dict[int, Dict[str, Any]] = {}
+            is_tool_round = False
+            t_first_chunk: Optional[float] = None
+            t_first_text: Optional[float] = None
+
+            try:
+                async for chunk in stream:
+                    if t_first_chunk is None:
+                        t_first_chunk = time.perf_counter()
+                        logger.info(
+                            "[LLM/timing] 首 chunk 到达 %.0fms (距离 chat_completion 调用)",
+                            (t_first_chunk - t_call) * 1000,
+                        )
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    # 工具调用片段
+                    tc_delta = getattr(delta, "tool_calls", None)
+                    if tc_delta:
+                        is_tool_round = True
+                        for tc in tc_delta:
+                            idx = tc.index
+                            slot = tool_calls_acc.setdefault(
+                                idx,
+                                {"id": "", "name": "", "arguments": ""},
+                            )
+                            if tc.id:
+                                slot["id"] = tc.id
+                            fn = getattr(tc, "function", None)
+                            if fn is not None:
+                                if getattr(fn, "name", None):
+                                    slot["name"] = fn.name
+                                if getattr(fn, "arguments", None):
+                                    slot["arguments"] += fn.arguments
+                    # 文本片段
+                    content_delta = getattr(delta, "content", None)
+                    if content_delta and not is_tool_round:
+                        if t_first_text is None:
+                            t_first_text = time.perf_counter()
+                            logger.info(
+                                "[LLM/timing] 首文字 token %.0fms (距离 chat_completion 调用)",
+                                (t_first_text - t_call) * 1000,
+                            )
+                        text_buf.append(content_delta)
+                        yield content_delta
+            except Exception as e:
+                logger.error(f"LLM 流式读取失败（第 {round_idx + 1} 轮）：{e}")
+                error_msg = f"抱歉，LLM 流式读取出错：{e}"
+                self._append_history({"role": "assistant", "content": error_msg})
+                yield error_msg
+                return
+
+            # ── 文本轮：append 历史并结束 ──
+            if not is_tool_round:
+                reply = "".join(text_buf)
+                self._append_history({"role": "assistant", "content": reply})
+                logger.info(
+                    f"Agent 流式完成（共 {round_idx + 1} 轮），回复长度={len(reply)}"
+                )
+                return
+
+            # ── 工具轮：组装 tool_calls，执行，继续下一轮 ──
+            ordered = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]
+
+            class _TC:
+                def __init__(self, d: Dict[str, Any]):
+                    self.id = d["id"]
+                    fn = type("F", (), {})()
+                    fn.name = d["name"]
+                    fn.arguments = d["arguments"] or "{}"
+                    self.function = fn
+
+            tool_call_objs = [_TC(d) for d in ordered]
+
+            self._append_history(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in tool_call_objs
+                    ],
+                },
+                persist=False,
+            )
+
+            tool_results = await self._execute_tool_calls(tool_call_objs, tool_executor)
+
+            for tc, result_str in zip(tool_call_objs, tool_results):
+                self._append_history(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result_str,
+                    },
+                    persist=False,
+                )
+
+            logger.debug(
+                f"第 {round_idx + 1} 轮工具调用完成（流式），调用数={len(tool_call_objs)}"
+            )
+
+        fallback = "抱歉，工具调用轮次超出限制，无法完成请求。"
+        self._append_history({"role": "assistant", "content": fallback})
+        yield fallback
 
     async def _run_with_responses_api(
         self,

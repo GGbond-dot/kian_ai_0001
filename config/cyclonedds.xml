@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS
+  xmlns="https://cdds.io/config"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="enp2s0" priority="default" multicast="default" />
+      </Interfaces>
+      <AllowMulticast>true</AllowMulticast>
+      <MaxMessageSize>65500B</MaxMessageSize>
+      <FragmentSize>4000B</FragmentSize>
+    </General>
+
+    <Internal>
+      <SocketReceiveBufferSize min="10MB" max="default" />
+      <SocketSendBufferSize min="10MB" max="default" />
+
+      <Watermarks>
+        <WhcLow>1 MB</WhcLow>
+        <WhcHighInit>1536 kB</WhcHighInit>
+        <WhcHigh>2 MB</WhcHigh>
+      </Watermarks>
+
+      <DefragUnreliableMaxSamples>20</DefragUnreliableMaxSamples>
+    </Internal>
+
+    <Discovery>
+      <Peers>
+        <Peer Address="192.168.10.137" />
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>20</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

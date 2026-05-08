@@ -135,13 +135,27 @@
         </widget>
        </item>
        <item row="8" column="0">
+        <widget class="QLabel" name="label_memory_summary_enabled">
+         <property name="text">
+          <string>启用滚动摘要记忆:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="8" column="1">
+        <widget class="QCheckBox" name="memory_summary_enabled_check">
+         <property name="text">
+          <string>启用</string>
+         </property>
+        </widget>
+       </item>
+       <item row="9" column="0">
         <widget class="QLabel" name="label_window_size">
          <property name="text">
           <string>主界面宽高:</string>
          </property>
         </widget>
        </item>
-       <item row="8" column="1">
+       <item row="9" column="1">
         <widget class="QComboBox" name="window_size_combo">
          <item>
           <property name="text">
@@ -158,9 +172,9 @@
            <string>100%</string>
           </property>
          </item>
-        </widget>
+       </widget>
        </item>
-       <item row="9" column="0" colspan="2">
+       <item row="10" column="0" colspan="2">
         <widget class="QGroupBox" name="mqtt_group">
          <property name="title">
           <string>MQTT配置</string>

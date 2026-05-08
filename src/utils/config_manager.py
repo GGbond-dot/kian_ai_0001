@@ -80,7 +80,7 @@ class ConfigManager:
             "enabled": True,
             "max_recent_messages": 24,
             "max_explicit_memories": 12,
-            "summary_enabled": True,
+            "summary_enabled": False,
             "summary_history_limit": 12,
             "summary_max_chars": 400,
             "summary_source_messages": 16,

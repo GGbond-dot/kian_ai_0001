@@ -249,138 +249,64 @@ class McpServer:
 
     def add_common_tools(self):
         """
-        添加通用工具.
+        注册 LLM 可见的工具。
+
+        当前定位：物流系统终端机器人，只暴露核心控制工具。
+        其他工具（calendar/timer/music/web/camera/screenshot/bazi/system.application）
+        源码保留在 src/mcp/tools/ 下，需要时把对应分组加到
+        config.json -> LLM.optional_tool_groups 列表里就能恢复注册。
+
+        可选分组与对应 manager:
+            calendar / timer / music / web
         """
+        from src.utils.config_manager import ConfigManager
+
         # 备份原有工具列表
         original_tools = self.tools.copy()
         self.tools.clear()
 
-        # 添加系统工具
+        # ── 核心：系统设备 + 无人机调度（永远开） ──
         from src.mcp.tools.system import get_system_tools_manager
 
-        system_manager = get_system_tools_manager()
-        system_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
-        robot_dispatch_manager = get_robot_dispatch_manager()
-        robot_dispatch_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
-	
-        # 添加日程管理工具
-        from src.mcp.tools.calendar import get_calendar_manager
-
-        calendar_manager = get_calendar_manager()
-        calendar_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
-
-        # 添加倒计时器工具
-        from src.mcp.tools.timer import get_timer_manager
-
-        timer_manager = get_timer_manager()
-        timer_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
-
-        # 添加音乐播放器工具
-        from src.mcp.tools.music import get_music_tools_manager
-
-        music_manager = get_music_tools_manager()
-        music_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
-
-        # 添加摄像头工具
-        from src.mcp.tools.camera import take_photo
-
-        # 注册take_photo工具
-        properties = PropertyList([Property("question", PropertyType.STRING)])
-        VISION_DESC = (
-            "【拍照识图】当用户提到：拍照、拍张照、照张相、看一下、看看、帮我看、这是什么、识别、"
-            "识图、看图、图片、照片、帮我瞧瞧 时调用本工具。\n"
-            "功能：拍照并分析图片内容，回答用户关于图片的问题。\n"
-            "使用场景：\n"
-            "1. 用户要求拍照看东西 (例如: '帮我看看这是什么', '拍个照', '看看前面是什么')\n"
-            "2. 物体/场景识别 ('这是什么东西', '帮我认一下', '识别一下')\n"
-            "3. 文字识别OCR ('读一下上面的字', '提取文字', '这上面写的什么')\n"
-            "4. 图片问答 ('图里有几个人', '这个是什么颜色', '上面有什么内容')\n\n"
-            "参数说明：\n"
-            "- question: 字符串类型，用户想了解的关于图片的问题\n\n"
-            "使用提示：当用户说'看'、'看看'、'这是什么'等模糊表达时，优先使用本工具进行拍照识别。\n"
-            "English: Take a photo and explain it. Use this tool after the user asks you to see something.\n"
-            "Args: `question` - The question that you want to ask about the photo.\n"
-            "Return: A JSON object that provides the photo information.\n"
-            "Examples: '帮我看看这是什么', '拍个照', '看看前面', 'take a photo', 'what is this'."
+        get_system_tools_manager().init_tools(
+            self.add_tool, PropertyList, Property, PropertyType
+        )
+        get_robot_dispatch_manager().init_tools(
+            self.add_tool, PropertyList, Property, PropertyType
         )
 
-        self.add_tool(
-            McpTool(
-                "take_photo",  # 保留原名兼容
-                VISION_DESC,
-                properties,
-                take_photo,
+        # ── 可选分组：根据 config 决定是否注册 ──
+        config = ConfigManager.get_instance()
+        enabled_groups = set(
+            config.get_config("LLM.optional_tool_groups", []) or []
+        )
+
+        if "calendar" in enabled_groups:
+            from src.mcp.tools.calendar import get_calendar_manager
+            get_calendar_manager().init_tools(
+                self.add_tool, PropertyList, Property, PropertyType
             )
-        )
 
-        # 添加场景监控工具（返回后台定时拍照+VLM分析的缓存结果）
-        from src.mcp.tools.camera import get_scene_status
-
-        SCENE_STATUS_DESC = (
-            "【查看当前场景】获取后台摄像头实时监控的最新场景描述。\n"
-            "调用时机：\n"
-            "1. 需要了解当前环境状况\n"
-            "2. 用户明确询问现场、画面、摄像头看到什么时\n"
-            "返回字段：description（场景描述）、age_seconds（数据距现在多少秒前）、"
-            "captured_at（拍摄时刻）。\n"
-            "注意：本工具直接返回缓存，无延迟；如需拍新照片请用 take_photo 工具。"
-            "不要在打招呼、寒暄、闲聊、简单问答时主动调用本工具。"
-        )
-        self.add_tool(
-            McpTool(
-                "get_scene_status",
-                SCENE_STATUS_DESC,
-                PropertyList([]),
-                get_scene_status,
+        if "timer" in enabled_groups:
+            from src.mcp.tools.timer import get_timer_manager
+            get_timer_manager().init_tools(
+                self.add_tool, PropertyList, Property, PropertyType
             )
-        )
-        from src.mcp.tools.screenshot import take_screenshot
 
-        # 注册take_screenshot工具
-        screenshot_properties = PropertyList(
-            [
-                Property("question", PropertyType.STRING),
-                Property("display", PropertyType.STRING, default_value=None),
-            ]
-        )
-        SCREENSHOT_DESC = (
-            "【桌面截图/屏幕分析】当用户提到：截屏、截图、看看桌面、分析屏幕、桌面上有什么、"
-            "屏幕截图、查看当前界面、分析当前页面、读取屏幕内容、屏幕OCR 时调用本工具。"
-            "功能：①截取整个桌面画面；②屏幕内容识别与分析；③屏幕OCR文字提取；④界面元素分析；"
-            "⑤应用程序识别；⑥错误信息截图分析；⑦桌面状态检查；⑧多屏幕截图。"
-            "参数说明：{ question: '你想了解的关于桌面/屏幕的问题', display: '显示器选择(可选)' }；"
-            "display可选值：'main'/'主屏'/'笔记本'(主显示器), 'secondary'/'副屏'/'外屏'(副显示器), 或留空(所有显示器)；"
-            "适用场景：桌面截图、屏幕分析、界面问题诊断、应用状态查看、错误截图分析等。"
-            "注意：该工具会截取桌面，请确保用户同意截图操作。"
-            "English: Desktop screenshot/screen analysis tool. Use when user mentions: screenshot, screen capture, "
-            "desktop analysis, screen content, current interface, screen OCR, etc. "
-            "Functions: ①Full desktop capture; ②Screen content recognition; ③Screen OCR; ④Interface analysis; "
-            "⑤Application identification; ⑥Error screenshot analysis; ⑦Desktop status check. "
-            "Parameters: { question: 'Question about desktop/screen', display: 'Display selection (optional)' }; "
-            "Display options: 'main'(primary), 'secondary'(external), or empty(all displays). "
-            "Examples: '截个图看看主屏', '查看副屏有什么', '分析当前屏幕内容', '读取屏幕上的文字'。"
-        )
-
-        self.add_tool(
-            McpTool(
-                "take_screenshot",
-                SCREENSHOT_DESC,
-                screenshot_properties,
-                take_screenshot,
+        if "music" in enabled_groups:
+            from src.mcp.tools.music import get_music_tools_manager
+            get_music_tools_manager().init_tools(
+                self.add_tool, PropertyList, Property, PropertyType
             )
-        )
 
-        # 添加八字命理工具
-        from src.mcp.tools.bazi import get_bazi_manager
+        if "web" in enabled_groups:
+            from src.mcp.tools.web import get_web_manager
+            get_web_manager().init_tools(
+                self.add_tool, PropertyList, Property, PropertyType
+            )
 
-        bazi_manager = get_bazi_manager()
-        bazi_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
-
-        # 添加联网工具（天气、新闻）
-        from src.mcp.tools.web import get_web_manager
-
-        web_manager = get_web_manager()
-        web_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
+        # camera / screenshot / bazi / system.application 已下线，
+        # 需要时去这个文件里手动恢复。
 
         # 恢复原有工具
         self.tools.extend(original_tools)

@@ -112,47 +112,73 @@ class QwenASRSTT:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_transcribe, opus_frames)
 
+    async def transcribe_pcm(self, pcm_bytes: bytes) -> str:
+        """直接吃 16kHz / 16-bit / 单声道 PCM bytes（平板麦克风路径）。"""
+        if not pcm_bytes:
+            return ""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_transcribe_pcm, pcm_bytes)
+
+    def _pcm_bytes_to_wav_bytes(self, pcm_bytes: bytes) -> tuple[bytes, int]:
+        with io.BytesIO() as buf:
+            with wave.open(buf, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(16000)
+                wav_file.writeframes(pcm_bytes)
+            return buf.getvalue(), len(pcm_bytes) // 2
+
+    def _sync_transcribe_pcm(self, pcm_bytes: bytes) -> str:
+        try:
+            wav_bytes, sample_count = self._pcm_bytes_to_wav_bytes(pcm_bytes)
+            if sample_count < 1600:
+                logger.debug("QwenASRSTT(PCM)：音频过短，跳过转写")
+                return ""
+            return self._transcribe_wav_bytes(wav_bytes)
+        except Exception as e:
+            logger.error("Qwen ASR(PCM) 转写失败：%s", e, exc_info=True)
+            return ""
+
+    def _transcribe_wav_bytes(self, wav_bytes: bytes) -> str:
+        client = self._get_client()
+        request_kwargs = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": self._wav_bytes_to_data_uri(wav_bytes)
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        extra_body = {"asr_options": {"enable_itn": self._enable_itn}}
+        if self._language:
+            extra_body["asr_options"]["language"] = self._language
+        request_kwargs["extra_body"] = extra_body
+
+        completion = client.chat.completions.create(**request_kwargs)
+        result = ""
+        if completion.choices:
+            message = completion.choices[0].message
+            result = (getattr(message, "content", "") or "").strip()
+        logger.info("Qwen ASR 转写结果：'%s'", result)
+        return result
+
     def _sync_transcribe(self, opus_frames: List[bytes]) -> str:
         try:
             wav_bytes, sample_count = self._opus_frames_to_wav_bytes(opus_frames)
             if not wav_bytes:
                 return ""
-
             if sample_count < 1600:
                 logger.debug("QwenASRSTT：音频过短，跳过转写")
                 return ""
-
-            client = self._get_client()
-            request_kwargs = {
-                "model": self._model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": self._wav_bytes_to_data_uri(wav_bytes)
-                                },
-                            }
-                        ],
-                    }
-                ],
-            }
-
-            extra_body = {"asr_options": {"enable_itn": self._enable_itn}}
-            if self._language:
-                extra_body["asr_options"]["language"] = self._language
-            request_kwargs["extra_body"] = extra_body
-
-            completion = client.chat.completions.create(**request_kwargs)
-            result = ""
-            if completion.choices:
-                message = completion.choices[0].message
-                result = (getattr(message, "content", "") or "").strip()
-
-            logger.info("Qwen ASR 转写结果：'%s'", result)
-            return result
+            return self._transcribe_wav_bytes(wav_bytes)
         except Exception as e:
             logger.error("Qwen ASR 转写失败：%s", e, exc_info=True)
             return ""

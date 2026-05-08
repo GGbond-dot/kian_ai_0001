@@ -10,6 +10,8 @@ Web 服务器 — FastAPI + WebSocket 管理.
 
 import asyncio
 import json
+import time
+import wave
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -35,8 +37,18 @@ class WebServer:
         self.app = FastAPI(title="AI Agent Console")
         self._connections: set[WebSocket] = set()
         self._slam_connections: set[WebSocket] = set()
+        self._audio_in_connections: set[WebSocket] = set()
+        self._audio_out_connections: set[WebSocket] = set()
         self._server = None
         self._command_callback: Optional[Callable] = None
+        self._audio_in_callback: Optional[Callable] = None
+        # 平板回报 tts_failed 等上行 JSON 的回调
+        # 签名: async (msg: dict) -> None
+        self._audio_out_text_callback: Optional[Callable] = None
+
+        # 平板麦克风调试落盘目录（每次连接新建一个 wav）
+        self._audio_in_dump_dir = Path("logs/tablet_audio_in")
+        self._audio_in_sample_rate = 16000
 
         # 当前状态快照 (新连接时发送)
         self._state: dict[str, Any] = {
@@ -54,6 +66,21 @@ class WebServer:
         """设置控制指令回调."""
         self._command_callback = callback
 
+    def set_audio_out_text_callback(self, callback: Callable) -> None:
+        """设置平板侧上行 JSON 回调（如 tts_failed）。
+
+        callback 签名: async (msg: dict) -> None
+        """
+        self._audio_out_text_callback = callback
+
+    def set_audio_in_callback(self, callback: Callable) -> None:
+        """设置平板麦克风 PCM 入流回调.
+
+        callback 签名: async (pcm_bytes: bytes, meta: dict) -> None
+        meta 含: captured_at_ms (平板侧时间戳), recv_at_ms (后端收到时刻)
+        """
+        self._audio_in_callback = callback
+
     def update_state(self, key: str, value: Any) -> None:
         """更新状态快照中的某个字段."""
         self._state[key] = value
@@ -67,7 +94,11 @@ class WebServer:
         @app.get("/")
         async def index():
             index_file = STATIC_DIR / "index.html"
-            return HTMLResponse(index_file.read_text(encoding="utf-8"))
+            # 禁止缓存 HTML 本体；脚本通过 ?v=N 自带缓存破除
+            return HTMLResponse(
+                index_file.read_text(encoding="utf-8"),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
         # SLAM 可视化页面
         @app.get("/slam")
@@ -75,8 +106,33 @@ class WebServer:
             slam_file = STATIC_DIR / "slam.html"
             return HTMLResponse(slam_file.read_text(encoding="utf-8"))
 
+        # 平板直连 TTS PoC（临时验证页，方案敲定后删）
+        @app.get("/tts_poc")
+        async def tts_poc_page():
+            poc_file = STATIC_DIR / "tts_poc.html"
+            return HTMLResponse(poc_file.read_text(encoding="utf-8"))
+
         # 静态文件
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+        # PWA: manifest 和 service worker 必须挂在根路径
+        # SW 的 scope 受文件 URL 限制，挂 /sw.js 才能控制整站；manifest 同理放根更稳
+        @app.get("/manifest.json")
+        async def manifest():
+            return FileResponse(
+                str(STATIC_DIR / "manifest.json"),
+                media_type="application/manifest+json",
+            )
+
+        @app.get("/sw.js")
+        async def service_worker():
+            response = FileResponse(
+                str(STATIC_DIR / "sw.js"),
+                media_type="application/javascript",
+            )
+            # SW 文件本身不能被缓存，否则更新不及时
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return response
 
         # 表情资源
         @app.get("/emojis/{filename}")
@@ -98,6 +154,19 @@ class WebServer:
         @app.websocket("/ws/slam")
         async def ws_slam_endpoint(websocket: WebSocket):
             await self._handle_slam_ws(websocket)
+
+        # WebSocket — 平板麦克风 PCM 入流 (16kHz / 16bit / mono)
+        # 协议: 客户端先发一帧 JSON 元数据 {sample_rate, frame_ms, ...}
+        # 之后每帧二进制 = 8 字节小端 captured_at_ms + 原始 PCM
+        @app.websocket("/ws/audio_in")
+        async def ws_audio_in_endpoint(websocket: WebSocket):
+            await self._handle_audio_in_ws(websocket)
+
+        # WebSocket — 服务端推 TTS 音频到平板播放
+        # 后端把整段 mp3 二进制发给所有连上的客户端
+        @app.websocket("/ws/audio_out")
+        async def ws_audio_out_endpoint(websocket: WebSocket):
+            await self._handle_audio_out_ws(websocket)
 
     # ===================== WebSocket 处理 =====================
 
@@ -147,6 +216,155 @@ class WebServer:
         finally:
             self._slam_connections.discard(websocket)
             logger.info("SLAM WS 已断开, 当前连接数: %d", len(self._slam_connections))
+
+    async def _handle_audio_in_ws(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._audio_in_connections.add(websocket)
+        logger.info(
+            "平板麦克风 WS 已连接, 当前连接数: %d", len(self._audio_in_connections)
+        )
+
+        # 调试落盘
+        self._audio_in_dump_dir.mkdir(parents=True, exist_ok=True)
+        wav_path = self._audio_in_dump_dir / f"audio_in_{int(time.time())}.wav"
+        wav_writer: Optional[wave.Wave_write] = None
+        total_bytes = 0
+        first_chunk_log_done = False
+
+        try:
+            wav_writer = wave.open(str(wav_path), "wb")
+            wav_writer.setnchannels(1)
+            wav_writer.setsampwidth(2)
+            wav_writer.setframerate(self._audio_in_sample_rate)
+
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                # 文本帧: 元数据 / 控制
+                if msg.get("text") is not None:
+                    try:
+                        meta = json.loads(msg["text"])
+                    except Exception:
+                        continue
+                    if meta.get("sample_rate"):
+                        self._audio_in_sample_rate = int(meta["sample_rate"])
+                        wav_writer.setframerate(self._audio_in_sample_rate)
+                    logger.info("平板麦克风 元数据: %s", meta)
+                    continue
+                # 二进制帧: 8 字节 captured_at_ms + PCM
+                payload = msg.get("bytes")
+                if not payload or len(payload) < 8:
+                    continue
+                recv_at_ms = int(time.time() * 1000)
+                captured_at_ms = int.from_bytes(payload[:8], "little", signed=False)
+                pcm = payload[8:]
+
+                wav_writer.writeframes(pcm)
+                total_bytes += len(pcm)
+
+                if not first_chunk_log_done:
+                    logger.info(
+                        "平板麦克风 首帧到达: bytes=%d, 端到端延时=%dms",
+                        len(pcm),
+                        recv_at_ms - captured_at_ms,
+                    )
+                    first_chunk_log_done = True
+
+                if self._audio_in_callback:
+                    try:
+                        await self._audio_in_callback(
+                            pcm,
+                            {"captured_at_ms": captured_at_ms, "recv_at_ms": recv_at_ms},
+                        )
+                    except Exception as e:
+                        logger.error("音频回调失败: %s", e)
+
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug("平板麦克风 WS 异常: %s", e)
+        finally:
+            if wav_writer is not None:
+                try:
+                    wav_writer.close()
+                except Exception:
+                    pass
+            self._audio_in_connections.discard(websocket)
+            logger.info(
+                "平板麦克风 WS 已断开, 累计 %d 字节, 落盘: %s",
+                total_bytes,
+                wav_path,
+            )
+
+    async def _handle_audio_out_ws(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._audio_out_connections.add(websocket)
+        logger.info(
+            "TTS 输出 WS 已连接, 当前连接数: %d", len(self._audio_out_connections)
+        )
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                # 文本帧：平板上行 JSON（tts_failed 等）
+                text = msg.get("text")
+                if text is not None and self._audio_out_text_callback is not None:
+                    try:
+                        data = json.loads(text)
+                    except Exception:
+                        logger.debug("audio_out 文本帧 JSON 解析失败: %r", text[:200])
+                        continue
+                    try:
+                        await self._audio_out_text_callback(data)
+                    except Exception as e:
+                        logger.error("audio_out 文本回调失败: %s", e)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug("TTS 输出 WS 异常: %s", e)
+        finally:
+            self._audio_out_connections.discard(websocket)
+            logger.info(
+                "TTS 输出 WS 已断开, 当前连接数: %d", len(self._audio_out_connections)
+            )
+
+    def has_audio_out_listeners(self) -> bool:
+        return len(self._audio_out_connections) > 0
+
+    async def broadcast_audio_out(self, mp3_bytes: bytes) -> int:
+        """把 mp3 字节广播给所有 /ws/audio_out 连接，返回成功推送的客户端数。"""
+        if not self._audio_out_connections:
+            return 0
+        dead: list[WebSocket] = []
+        ok = 0
+        for ws in self._audio_out_connections:
+            try:
+                await ws.send_bytes(mp3_bytes)
+                ok += 1
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._audio_out_connections.discard(ws)
+        return ok
+
+    async def broadcast_audio_out_text(self, msg: dict) -> int:
+        """把 JSON 文本帧广播给所有 /ws/audio_out 连接（用于 tts_text 等下行控制）。"""
+        if not self._audio_out_connections:
+            return 0
+        payload = json.dumps(msg, ensure_ascii=False)
+        dead: list[WebSocket] = []
+        ok = 0
+        for ws in self._audio_out_connections:
+            try:
+                await ws.send_text(payload)
+                ok += 1
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._audio_out_connections.discard(ws)
+        return ok
 
     async def broadcast_slam_bytes(self, payload: bytes) -> None:
         """广播二进制 SLAM 帧给所有 /ws/slam 连接."""
@@ -203,10 +421,17 @@ class WebServer:
             logger.info("Web 服务器已停止")
 
         # 关闭所有连接
-        for ws in list(self._connections) + list(self._slam_connections):
+        for ws in (
+            list(self._connections)
+            + list(self._slam_connections)
+            + list(self._audio_in_connections)
+            + list(self._audio_out_connections)
+        ):
             try:
                 await ws.close()
             except Exception:
                 pass
         self._connections.clear()
         self._slam_connections.clear()
+        self._audio_in_connections.clear()
+        self._audio_out_connections.clear()

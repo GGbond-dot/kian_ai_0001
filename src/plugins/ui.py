@@ -1,7 +1,11 @@
+import asyncio
 from typing import Any, Optional
 
 from src.constants.constants import AbortReason, DeviceState
 from src.plugins.base import Plugin
+from src.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class UIPlugin(Plugin):
@@ -75,8 +79,8 @@ class UIPlugin(Plugin):
         """
         设置 display 回调.
         """
-        if self._is_gui:
-            # GUI 需要调度到异步任务
+        if self._is_gui or self.mode == "web":
+            # GUI / Web：UI 提供按住说话按钮，需要 press/release 回调
             callbacks = {
                 "press_callback": self._wrap_callback(self._press),
                 "release_callback": self._wrap_callback(self._release),
@@ -93,6 +97,52 @@ class UIPlugin(Plugin):
             }
 
         await self.display.set_callbacks(**callbacks)
+
+        # 平板 WebView 推上来的外部 PCM —— 仅 WebDisplay 支持
+        if hasattr(self.display, "set_audio_in_callback"):
+            self.display.set_audio_in_callback(self._on_external_pcm)
+
+        # 把 TTS 远端播放接口注册给 protocol
+        protocol = getattr(self.app, "protocol", None)
+        if (
+            protocol is not None
+            and hasattr(self.display, "broadcast_audio_out")
+            and hasattr(self.display, "has_audio_out_listeners")
+            and hasattr(protocol, "set_tts_remote_sink")
+        ):
+            protocol.set_tts_remote_sink(
+                self.display.broadcast_audio_out,
+                self.display.has_audio_out_listeners,
+            )
+
+        # 平板直连 TTS：JSON 下行 + 上行回调
+        if (
+            protocol is not None
+            and hasattr(self.display, "broadcast_audio_out_text")
+            and hasattr(protocol, "set_tts_remote_text_sink")
+        ):
+            protocol.set_tts_remote_text_sink(self.display.broadcast_audio_out_text)
+        if (
+            protocol is not None
+            and hasattr(self.display, "set_audio_out_text_callback")
+            and hasattr(protocol, "on_tablet_audio_out_text")
+        ):
+            self.display.set_audio_out_text_callback(protocol.on_tablet_audio_out_text)
+
+    async def _on_external_pcm(self, pcm_bytes: bytes, meta: dict) -> None:
+        """把 /ws/audio_in 收到的 PCM 喂给当前 protocol。"""
+        protocol = getattr(self.app, "protocol", None)
+        if protocol is None:
+            return
+        feed = getattr(protocol, "feed_external_pcm", None)
+        if feed is None:
+            return
+        try:
+            res = feed(pcm_bytes)
+            if asyncio.iscoroutine(res):
+                await res
+        except Exception as e:
+            logger.error("feed_external_pcm 失败: %s", e)
 
     def _wrap_callback(self, coro_func):
         """

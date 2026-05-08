@@ -36,16 +36,8 @@ class McpPlugin(Plugin):
         except Exception:
             pass
 
-        # 启动后台场景监控（定时拍照+VLM分析）
-        try:
-            from src.mcp.tools.camera.scene_monitor import SceneMonitor
-            from src.utils.config_manager import ConfigManager
-            interval = int(ConfigManager.get_instance().get_config(
-                "CAMERA.scene_monitor_interval", 30
-            ))
-            SceneMonitor.get_instance().start(interval)
-        except Exception as e:
-            logger.warning(f"SceneMonitor 启动失败（可能未配置摄像头）: {e}")
+        # SceneMonitor（后台定时拍照+VLM 分析）已下线 —— 当前部署无可用摄像头，
+        # 之前每 30s 报一次"拍照失败"刷屏。需要重启时改回原代码。
 
     async def on_incoming_json(self, message: Any) -> None:
         if not isinstance(message, dict):
@@ -63,12 +55,7 @@ class McpPlugin(Plugin):
             pass
 
     async def shutdown(self) -> None:
-        # 停止后台场景监控
-        try:
-            from src.mcp.tools.camera.scene_monitor import SceneMonitor
-            SceneMonitor.get_instance().stop()
-        except Exception:
-            pass
+        # SceneMonitor 已下线，无需 stop
         # 可选：解除回调引用，帮助GC
         try:
             if self._server:

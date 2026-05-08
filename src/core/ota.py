@@ -1,3 +1,11 @@
+"""
+小智 OTA 配置 / 设备激活相关（遗留，默认不启用）。
+
+仅在 `--protocol websocket` 或 `--protocol mqtt` 时被调用。
+本项目默认 `--protocol local`，main.py:start_app 会跳过激活流程，本模块整段不会执行。
+保留是为了备用，不建议作为主路。
+"""
+
 import asyncio
 import json
 import socket

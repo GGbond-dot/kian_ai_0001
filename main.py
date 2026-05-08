@@ -1,7 +1,14 @@
 import argparse
 import asyncio
+import os
 import signal
 import sys
+
+# ROS2 通信环境变量（与开发板飞控同域）
+# 必须在 import rclpy 之前 setdefault，否则进程 init 后修改无效
+os.environ.setdefault("ROS_DOMAIN_ID", "10")
+os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+os.environ.pop("CYCLONEDDS_URI", None)
 
 from src.application import Application
 from src.utils.logging_config import get_logger, setup_logging
@@ -13,7 +20,7 @@ def parse_args():
     """
     解析命令行参数.
     """
-    parser = argparse.ArgumentParser(description="小智Ai客户端")
+    parser = argparse.ArgumentParser(description="aiagent — 本地 Agent 客户端（默认）")
     parser.add_argument(
         "--mode",
         choices=["gui", "cli", "web"],
@@ -23,8 +30,8 @@ def parse_args():
     parser.add_argument(
         "--protocol",
         choices=["mqtt", "websocket", "local"],
-        default="websocket",
-        help="通信协议：mqtt、websocket 或 local（本地 LLM Agent，无需小智服务器）",
+        default="local",
+        help="通信协议：local（本地 LLM Agent，默认）/ websocket / mqtt",
     )
     parser.add_argument(
         "--skip-activation",
@@ -63,7 +70,7 @@ async def start_app(mode: str, protocol: str, skip_activation: bool) -> int:
     """
     启动应用的统一入口（在已有事件循环中执行）.
     """
-    logger.info("启动小智AI客户端")
+    logger.info("启动 aiagent")
 
     # 处理激活流程
     # local 协议不依赖小智服务器，无需激活

@@ -1,0 +1,20 @@
+{
+  "name": "AI Agent Console",
+  "short_name": "AI Agent",
+  "description": "aiagent 远程控制台 + SLAM Web Viewer",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
+  "orientation": "landscape",
+  "background_color": "#040814",
+  "theme_color": "#040a14",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

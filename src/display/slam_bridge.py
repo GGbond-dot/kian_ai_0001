@@ -176,44 +176,83 @@ class SlamBridge:
         import rclpy
         from rclpy.executors import MultiThreadedExecutor
         from rclpy.node import Node
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
         # TODO(slam-team): 确认下列消息类型导入路径正确
         from nav_msgs.msg import Odometry, Path
         from sensor_msgs.msg import PointCloud2
 
-        rclpy.init(args=None)
+        # 与飞机端发布 QoS 对齐: rclcpp::QoS(队列深度).best_effort()
+        def best_effort_qos(depth: int) -> QoSProfile:
+            return QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=depth,
+            )
+
+        map_qos = best_effort_qos(1)
+        scan_qos = best_effort_qos(5)
+        odom_qos = best_effort_qos(10)
+        path_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        if not rclpy.ok():
+            rclpy.init(args=None)
         node = Node("aiagent_slam_bridge")
+        bare_subscribe = os.environ.get("AIAGENT_SLAM_BARE_SUBSCRIBE") == "1"
+        debug_slam = os.environ.get("AIAGENT_SLAM_DEBUG") == "1"
+        if bare_subscribe:
+            logger.warning(
+                "SlamBridge: 裸订阅测试模式，仅建立 ROS 订阅，不处理或推送 SLAM 数据"
+            )
+        if debug_slam:
+            logger.info("SlamBridge: SLAM 调试日志已开启")
 
         def on_map(msg: PointCloud2):
-            # TODO: pointcloud2 → numpy → voxel downsample → encode
-            # 见 _downsample_pc2() 占位实现
+            if bare_subscribe:
+                return
             now = time.time()
             if now - self._last_map_t < 1.0 / C.SLAM_MAP_MAX_HZ:
                 return
             self._last_map_t = now
             xyz = self._pc2_to_numpy(msg)
             xyz = self._voxel_downsample(xyz, C.SLAM_MAP_VOXEL_SIZE)
+            if debug_slam:
+                logger.info("SLAM map: %d points after downsample", xyz.shape[0])
             self._schedule_send(encode_points(C.CHAN_MAP, xyz))
 
         def on_scan(msg: PointCloud2):
+            if bare_subscribe:
+                return
             now = time.time()
             if now - self._last_scan_t < 1.0 / C.SLAM_SCAN_MAX_HZ:
                 return
             self._last_scan_t = now
             xyz = self._pc2_to_numpy(msg)
             xyz = self._voxel_downsample(xyz, C.SLAM_SCAN_VOXEL_SIZE)
+            if debug_slam:
+                logger.info("SLAM scan: %d points after downsample", xyz.shape[0])
             self._schedule_send(encode_points(C.CHAN_SCAN, xyz))
 
         def on_odom(msg: Odometry):
+            if bare_subscribe:
+                return
             now = time.time()
             if now - self._last_odom_t < 1.0 / C.SLAM_ODOM_MAX_HZ:
                 return
             self._last_odom_t = now
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
+            if debug_slam:
+                logger.info("SLAM odom: x=%.3f y=%.3f z=%.3f", p.x, p.y, p.z)
             self._schedule_send(encode_pose(p.x, p.y, p.z, q.x, q.y, q.z, q.w))
 
         def on_path(msg: Path):
+            if bare_subscribe:
+                return
             pts = [(ps.pose.position.x, ps.pose.position.y, ps.pose.position.z)
                    for ps in msg.poses[::C.SLAM_PATH_DECIMATE]]
             if not pts:
@@ -221,10 +260,10 @@ class SlamBridge:
             arr = np.array(pts, dtype=np.float32)
             self._schedule_send(encode_points(C.CHAN_PATH, arr))
 
-        node.create_subscription(PointCloud2, C.SLAM_TOPIC_MAP, on_map, 1)
-        node.create_subscription(PointCloud2, C.SLAM_TOPIC_SCAN, on_scan, 5)
-        node.create_subscription(Odometry, C.SLAM_TOPIC_ODOM, on_odom, 10)
-        node.create_subscription(Path, C.SLAM_TOPIC_PATH, on_path, 1)
+        node.create_subscription(PointCloud2, C.SLAM_TOPIC_MAP, on_map, map_qos)
+        node.create_subscription(PointCloud2, C.SLAM_TOPIC_SCAN, on_scan, scan_qos)
+        node.create_subscription(Odometry, C.SLAM_TOPIC_ODOM, on_odom, odom_qos)
+        node.create_subscription(Path, C.SLAM_TOPIC_PATH, on_path, path_qos)
 
         executor = MultiThreadedExecutor()
         executor.add_node(node)

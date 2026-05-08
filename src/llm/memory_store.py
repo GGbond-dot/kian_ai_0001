@@ -32,7 +32,7 @@ class MemoryStore:
             self.config.get_config("MEMORY.max_explicit_memories", 12)
         )
         self.summary_enabled = bool(
-            self.config.get_config("MEMORY.summary_enabled", True)
+            self.config.get_config("MEMORY.summary_enabled", False)
         )
         self.summary_history_limit = int(
             self.config.get_config("MEMORY.summary_history_limit", 12)

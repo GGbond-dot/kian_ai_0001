@@ -44,20 +44,8 @@ class SystemToolsManager:
                 add_tool, PropertyList, Property, PropertyType
             )
 
-            # 注册应用程序启动工具
-            self._register_app_launcher_tool(
-                add_tool, PropertyList, Property, PropertyType
-            )
-
-            # 注册应用程序扫描工具
-            self._register_app_scanner_tool(
-                add_tool, PropertyList, Property, PropertyType
-            )
-
-            # 注册应用程序关闭工具
-            self._register_app_killer_tools(
-                add_tool, PropertyList, Property, PropertyType
-            )
+            # 应用程序启动/扫描/关闭工具：嵌入式平板部署场景下不需要，
+            # 不向 LLM 注册。原实现保留在 _register_app_*，需要时改回来。
 
             self._initialized = True
             logger.info("[SystemManager] 系统工具注册完成")
@@ -78,12 +66,7 @@ class SystemToolsManager:
         add_tool(
             (
                 "self.audio_speaker.set_volume",
-                "Set the system speaker volume to an absolute value (0-100).\n"
-                "Use when user mentions: volume, sound, louder, quieter, mute, unmute, adjust volume.\n"
-                "Examples: 'set volume to 50', 'turn volume up', 'make it louder', 'mute', "
-                "'音量设为50', '调大声音', '声音小一点', '静音'.\n"
-                "Parameter:\n"
-                "- volume: Integer (0-100) representing the target volume level. Set to 0 for mute.",
+                "设置系统音量(0-100)。用户说「调大/调小/静音/音量设为X」时调用。volume=0 表示静音。",
                 volume_props,
                 set_volume,
             )
@@ -100,12 +83,7 @@ class SystemToolsManager:
         add_tool(
             (
                 "self.audio_speaker.get_volume",
-                "Get the current system speaker volume level.\n"
-                "Use when user asks about: current volume, volume level, how loud, what's the volume.\n"
-                "Examples: 'what is the current volume?', 'how loud is it?', 'check volume level', "
-                "'现在音量多少?', '查看音量', '音量是多少'.\n"
-                "Returns:\n"
-                "- Integer (0-100) representing the current volume level.",
+                "查询当前系统音量(返回 0-100)。用户问「现在音量多少」时调用。",
                 get_volume_props,
                 get_volume,
             )

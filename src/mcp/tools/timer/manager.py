@@ -85,14 +85,9 @@ class TimerToolsManager:
         add_tool(
             (
                 "timer.start_countdown",
-                "Start a countdown timer that will execute an MCP tool after a specified delay. "
-                "The command should be a JSON string containing MCP tool name and arguments. "
-                'For example: \'{"name": "self.audio_speaker.set_volume", "arguments": {"volume": 50}}\' '
-                "Use this when the user wants to: \n"
-                "1. Set a timer to control system settings (volume, device status, etc.) \n"
-                "2. Schedule delayed MCP tool executions \n"
-                "3. Create reminders with automatic tool calls \n"
-                "The timer will return a timer_id that can be used to cancel it later.",
+                "启动倒计时，到点执行一个 MCP 工具调用。"
+                'command 是 JSON 字符串，例: {"name":"self.audio_speaker.set_volume","arguments":{"volume":50}}。'
+                "delay 单位秒（1-3600）。返回 timer_id 用于取消。",
                 timer_props,
                 start_countdown_timer,
             )
@@ -117,11 +112,7 @@ class TimerToolsManager:
         add_tool(
             (
                 "timer.cancel_countdown",
-                "Cancel an active countdown timer by its ID. "
-                "Use this when the user wants to: \n"
-                "1. Cancel a previously set timer \n"
-                "2. Stop a scheduled action before it executes \n"
-                "You need the timer_id which is returned when starting a countdown.",
+                "按 timer_id 取消一个进行中的倒计时。",
                 cancel_props,
                 cancel_countdown_timer,
             )
@@ -135,14 +126,7 @@ class TimerToolsManager:
         add_tool(
             (
                 "timer.get_active_timers",
-                "Get information about all currently active countdown timers. "
-                "Returns details including timer IDs, remaining time, commands to execute, "
-                "and progress for each active timer. "
-                "Use this when the user wants to: \n"
-                "1. Check what timers are currently running \n"
-                "2. See remaining time for active timers \n"
-                "3. Get timer IDs for cancellation \n"
-                "4. Monitor timer progress and status",
+                "列出所有进行中的倒计时（含 timer_id、剩余时间、待执行命令）。",
                 PropertyList(),
                 get_active_countdown_timers,
             )

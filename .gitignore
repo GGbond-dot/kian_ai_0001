@@ -2,6 +2,8 @@
 /config/*
 !/config/README.md
 !/config/config.example.json
+!/config/cyclonedds.xml
+!/config/60-cyclonedds.conf
 
 .venv
 **/__pycache__/
