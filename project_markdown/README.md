@@ -8,8 +8,6 @@
 - ROS2 任务发布与联调
 - SLAM Web Viewer（`/slam` 页面，three.js 实时可视化 FAST-LIO 输出）
 
-历史上这个仓库 fork 自 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi)，曾用过小智云端协议（websocket / mqtt）。**当前默认已切换到本地 Agent**，小智相关代码保留但不再使用。如果你想用小智，看本文档底部的"遗留：小智协议"。
-
 这个 README 的目标不是覆盖所有细节，而是让第一次接手这个仓库的人能快速看懂：
 
 1. 这个项目是干什么的
@@ -169,7 +167,7 @@ aiagent/
   应用生命周期、设备状态切换、协议与 UI 调度的主逻辑
 - `src/protocols/`
   - `local_agent_protocol.py` ← **当前默认**
-  - `websocket_protocol.py` / `mqtt_protocol.py` ← 小智遗留，保留不删
+  - `websocket_protocol.py` / `mqtt_protocol.py` ← 历史协议适配，默认不启用
 - `src/llm/`
   LLM 接入、工具调用循环、Responses API 兼容逻辑
 - `src/mcp/tools/`
@@ -179,7 +177,7 @@ aiagent/
 - `src/display/`
   GUI / CLI / Web 显示层（Web 含 `/slam` 三维可视化、SlamBridge ROS 桥）
 - `src/views/`
-  设置窗口、激活窗口等界面组件（小智时代留下的，GUI 模式仍用）
+  设置窗口、激活窗口等界面组件（GUI 模式仍用）
 - `scripts/`
   调试、诊断、ROS2、自检、备份脚本
 
@@ -199,7 +197,7 @@ aiagent/
 - `--protocol local`（**默认**）
   本地 STT + LLM + TTS 闭环，直接走你自己的 LLM API
 - `--protocol websocket` / `--protocol mqtt`
-  小智云端协议，遗留保留，**默认不走**
+  历史云端协议适配，**默认不走**
 
 ## 常用脚本
 
@@ -328,21 +326,3 @@ bash scripts/backup_local_state.sh
 - 运行态文件不进 git
 - 备份文件不进 git
 - 业务逻辑优先按 `src/` 目录归类，不在根目录堆脚本
-
-## 遗留：小智协议
-
-历史上这个仓库连过小智云端（`websocket` / `mqtt` + OTA + 设备激活）。这部分代码现在**保留但默认不启用**，相关文件：
-
-- `src/protocols/websocket_protocol.py`、`src/protocols/mqtt_protocol.py`
-- `src/core/ota.py`、`src/core/system_initializer.py`
-- `src/utils/device_activator.py`
-
-如果你确实要回到小智模式：
-
-```bash
-python main.py --mode gui --protocol websocket
-```
-
-需要在 `config/config.json` 里补齐 `WEBSOCKET_ACCESS_TOKEN` 或 `MQTT_INFO.*`，并保证 OTA 服务器认你的设备 SN/MAC。否则会看到 `OTA服务器错误: HTTP 400` 然后协议连接失败。
-
-不建议。本地 Agent 已经够用，自己掌控。

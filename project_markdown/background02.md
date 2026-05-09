@@ -18,7 +18,7 @@
 
 多无人机协同物流系统的智能终端机器人（嵌入式开发板 + 平板 WebView 展示端）。
 核心：无人机起飞/降落、SLAM 建图查看。
-不是个人桌面助手（fork 自 py-xiaozhi 已大幅瘦身）。
+不是个人桌面助手。
 
 ---
 
@@ -194,11 +194,11 @@ self.audio_speaker.set_volume  self.audio_speaker.get_volume
 
 - **LLM**（Tier 2，coder-next，需 tool-calling）：
   - base_url: `https://coding.dashscope.aliyuncs.com/v1`
-  - api_key: `sk-sp-ac3c84c5e49946ceb4fe63fbee8f9787`
+  - api_key: `${DASHSCOPE_CODING_API_KEY}`
   - model: `qwen3-coder-next`
 - **LLM_FAST**（Tier 1，flash）：
   - base_url: `https://dashscope.aliyuncs.com/compatible-mode/v1`
-  - api_key: `sk-4529e46f796b46539ba4307d5d4fe5c2`
+  - api_key: `${DASHSCOPE_API_KEY}`
   - model: `qwen-flash`
 - **TTS**（qwen-tts）：
   - base_url: `https://dashscope.aliyuncs.com/api/v1`

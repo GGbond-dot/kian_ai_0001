@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 from typing import Any, Dict
 
@@ -223,6 +224,9 @@ class ConfigManager:
             value = self._config
             for key in path.split("."):
                 value = value[key]
+            if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
+                env_name = value[2:-1].strip()
+                return os.getenv(env_name, default if default is not None else "")
             return value
         except (KeyError, TypeError):
             return default

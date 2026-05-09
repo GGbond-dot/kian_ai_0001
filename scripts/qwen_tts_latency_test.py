@@ -4,11 +4,12 @@
 """
 import base64
 import json
+import os
 import time
 
 import requests
 
-API_KEY = "sk-4529e46f796b46539ba4307d5d4fe5c2"
+API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 MODEL = "qwen3-tts-flash"
 VOICE = "Cherry"
 TEXT = "你好呀你好呀，这是一段火山豆包语音合成首块延迟测试文本。"  # 与豆包测试相同 28 字
@@ -32,6 +33,9 @@ payload = {
 
 
 def main():
+    if not API_KEY:
+        raise RuntimeError("请先设置 DASHSCOPE_API_KEY")
+
     print(f"text 字数={len(TEXT)}  voice={VOICE}  model={MODEL}")
     print(f"POST {URL}")
     t0 = time.perf_counter()

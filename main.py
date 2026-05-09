@@ -38,6 +38,21 @@ def parse_args():
         action="store_true",
         help="跳过激活流程，直接启动应用（仅用于调试）",
     )
+    parser.add_argument(
+        "--tablet-tts-api-key",
+        default="",
+        help="平板浏览器直连 DashScope TTS 使用的临时 API key（默认使用 --route1-api-key）",
+    )
+    parser.add_argument(
+        "--route1-api-key",
+        default="",
+        help="路由1/Tier1 使用的 DashScope API key：qwen-flash、STT、TTS、平板直连 TTS",
+    )
+    parser.add_argument(
+        "--route2-api-key",
+        default="",
+        help="路由2/Tier2 使用的 DashScope Coding API key：qwen3-coder-next",
+    )
     return parser.parse_args()
 
 
@@ -94,6 +109,19 @@ if __name__ == "__main__":
     try:
         args = parse_args()
         setup_logging()
+        if args.route1_api_key:
+            os.environ["DASHSCOPE_API_KEY"] = args.route1_api_key
+            os.environ["DASHSCOPE_TABLET_TTS_API_KEY"] = (
+                args.tablet_tts_api_key or args.route1_api_key
+            )
+            logger.info("已设置本次进程的路由1 API key")
+        elif args.tablet_tts_api_key:
+            os.environ["DASHSCOPE_TABLET_TTS_API_KEY"] = args.tablet_tts_api_key
+            logger.info("已设置本次进程的平板 TTS API key")
+
+        if args.route2_api_key:
+            os.environ["DASHSCOPE_CODING_API_KEY"] = args.route2_api_key
+            logger.info("已设置本次进程的路由2 API key")
 
         # 检测Wayland环境并设置Qt平台插件配置
         import os

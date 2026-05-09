@@ -4,11 +4,12 @@
 """
 import base64
 import json
+import os
 import time
 
 import requests
 
-API_KEY = "2262c27d-d9c5-442a-aac6-d820c6b5eb4e"
+API_KEY = os.getenv("VOLCANO_TTS_API_KEY", "")
 RESOURCE_ID = "seed-tts-2.0"
 SPEAKER = "zh_female_vv_uranus_bigtts"
 TEXT = "你好呀你好呀，这是一段火山豆包语音合成首块延迟测试文本。"
@@ -60,6 +61,9 @@ def parse_sse(stream):
 
 
 def main():
+    if not API_KEY:
+        raise RuntimeError("请先设置 VOLCANO_TTS_API_KEY")
+
     print(f"text 字数={len(TEXT)}  speaker={SPEAKER}  resource={RESOURCE_ID}")
     print(f"POST {URL}")
     t0 = time.perf_counter()

@@ -31,6 +31,6 @@ jobs:
             
             ## Documentation
             
-            - [在线文档](https://huangjunsen0406.github.io/py-xiaozhi/)
+            - 在线文档请参考本仓库 README
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

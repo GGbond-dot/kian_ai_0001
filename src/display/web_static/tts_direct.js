@@ -5,10 +5,11 @@
 (function () {
   'use strict';
 
-  // 内网信任：API key 直接写在前端（决策 1）
-  const API_KEY = "sk-4529e46f796b46539ba4307d5d4fe5c2";
-  const URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
-  const MODEL = "qwen3-tts-flash";
+  const CONFIG_URL = "/api/tablet_tts_config";
+  let API_KEY = "";
+  let URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+  let MODEL = "qwen3-tts-flash";
+  let DEFAULT_VOICE = "Cherry";
   const SAMPLE_RATE = 24000;
   const FETCH_TIMEOUT_MS = 3000; // 首块超时（决策 4：> 3s 触发 fallback）
 
@@ -30,6 +31,27 @@
 
   function log() {
     try { console.log.apply(console, ['[tts_direct]'].concat([].slice.call(arguments))); } catch (_) {}
+  }
+
+  async function loadConfig() {
+    if (API_KEY) return true;
+    try {
+      const resp = await fetch(CONFIG_URL, { cache: 'no-store' });
+      if (!resp.ok) {
+        log('TTS config 非200', resp.status);
+        return false;
+      }
+      const cfg = await resp.json();
+      API_KEY = cfg.api_key || '';
+      URL = cfg.url || URL;
+      MODEL = cfg.model || MODEL;
+      DEFAULT_VOICE = cfg.voice || DEFAULT_VOICE;
+      if (!API_KEY) log('未通过 --tablet-tts-api-key 设置 TTS key');
+      return !!API_KEY;
+    } catch (e) {
+      log('TTS config 读取失败', e);
+      return false;
+    }
   }
 
   function ensureCtx() {
@@ -106,6 +128,12 @@
     let resp;
     const t0 = performance.now();
     try {
+      if (!(await loadConfig())) {
+        reportFailed(seg, 'missing_api_key');
+        seg.done = true;
+        seg.firstChunkResolved && seg.firstChunkResolved(false);
+        return;
+      }
       resp = await fetch(URL, {
         method: 'POST',
         signal: controller.signal,
@@ -243,7 +271,7 @@
     const seg = {
       id,
       text: msg.text || '',
-      voice: msg.voice || 'Cherry',
+      voice: msg.voice || DEFAULT_VOICE,
       failed: false,
       chunks: [],
     };
@@ -264,6 +292,7 @@
     const ctrl = new AbortController();
     const t0 = performance.now();
     try {
+      if (!(await loadConfig())) return;
       const r = await fetch(URL, {
         method: 'POST',
         signal: ctrl.signal,
@@ -274,7 +303,7 @@
         },
         body: JSON.stringify({
           model: MODEL,
-          input: { text: '嗨', voice: 'Cherry', language_type: 'Chinese' },
+          input: { text: '嗨', voice: DEFAULT_VOICE, language_type: 'Chinese' },
         }),
       });
       if (!r.ok) {

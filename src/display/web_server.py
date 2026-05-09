@@ -10,6 +10,7 @@ Web 服务器 — FastAPI + WebSocket 管理.
 
 import asyncio
 import json
+import os
 import time
 import wave
 from pathlib import Path
@@ -111,6 +112,15 @@ class WebServer:
         async def tts_poc_page():
             poc_file = STATIC_DIR / "tts_poc.html"
             return HTMLResponse(poc_file.read_text(encoding="utf-8"))
+
+        @app.get("/api/tablet_tts_config")
+        async def tablet_tts_config():
+            return {
+                "api_key": os.getenv("DASHSCOPE_TABLET_TTS_API_KEY", ""),
+                "url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+                "model": "qwen3-tts-flash",
+                "voice": "Cherry",
+            }
 
         # 静态文件
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

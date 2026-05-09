@@ -1,10 +1,11 @@
 // 平板直连 qwen-tts PoC：测端到端首块延迟 + Web Audio 流式播放 PCM。
-// 仅用于内网验证，API key 硬编码（决策 1：内网信任）。
+// API key 由 main.py --tablet-tts-api-key 注入到本次进程。
 
-const API_KEY = "sk-4529e46f796b46539ba4307d5d4fe5c2";
-const URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
-const MODEL = "qwen3-tts-flash";
-const VOICE = "Cherry";
+const CONFIG_URL = "/api/tablet_tts_config";
+let API_KEY = "";
+let URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+let MODEL = "qwen3-tts-flash";
+let VOICE = "Cherry";
 
 const $ = (id) => document.getElementById(id);
 const log = $("log");
@@ -19,6 +20,25 @@ function logLine(msg, cls = "") {
 
 let audioCtx = null;
 let nextStartTime = 0;
+
+async function loadConfig() {
+  if (API_KEY) return true;
+  const resp = await fetch(CONFIG_URL, { cache: "no-store" });
+  if (!resp.ok) {
+    logLine(`读取 TTS config 失败: ${resp.status}`, "err");
+    return false;
+  }
+  const cfg = await resp.json();
+  API_KEY = cfg.api_key || "";
+  URL = cfg.url || URL;
+  MODEL = cfg.model || MODEL;
+  VOICE = cfg.voice || VOICE;
+  if (!API_KEY) {
+    logLine("未通过 --tablet-tts-api-key 设置 TTS key", "err");
+    return false;
+  }
+  return true;
+}
 
 function ensureCtx() {
   if (!audioCtx) {
@@ -60,6 +80,10 @@ async function runTest() {
 
   let resp;
   try {
+    if (!(await loadConfig())) {
+      $("btn-test").disabled = false;
+      return;
+    }
     resp = await fetch(URL, {
       method: "POST",
       headers: {
