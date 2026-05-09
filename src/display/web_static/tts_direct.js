@@ -115,6 +115,19 @@
     }
   }
 
+  function reportMetric(seg, metric, fields) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify(Object.assign({
+        type: 'tts_client_metric',
+        segment_id: seg.id,
+        metric,
+      }, fields || {})));
+    } catch (e) {
+      log('上报 tts_client_metric 异常', e);
+    }
+  }
+
   // 启动 fetch 并把音频块塞进 seg.chunks 队列；播放循环从队列消费
   async function fetchSegment(seg) {
     seg.chunks = [];
@@ -197,7 +210,15 @@
           seg.chunks.push(u8);
           if (!firstResolved) {
             firstResolved = true;
-            log('seg=', seg.id, '首块 PCM 到达', (performance.now() - t0).toFixed(0), 'ms size=', u8.length);
+            const fetchMs = performance.now() - t0;
+            const nowMs = Date.now();
+            const serverToFirstMs = seg.serverSentMs ? nowMs - seg.serverSentMs : -1;
+            log('seg=', seg.id, '首块 PCM 到达', fetchMs.toFixed(0), 'ms server→first=', serverToFirstMs, 'ms size=', u8.length);
+            reportMetric(seg, 'first_pcm', {
+              fetch_ms: fetchMs,
+              server_to_first_ms: serverToFirstMs,
+              chunk_bytes: u8.length,
+            });
             seg.firstChunkResolved && seg.firstChunkResolved(true);
           }
         }
@@ -272,6 +293,7 @@
       id,
       text: msg.text || '',
       voice: msg.voice || DEFAULT_VOICE,
+      serverSentMs: msg.server_sent_ms || 0,
       failed: false,
       chunks: [],
     };

@@ -521,10 +521,21 @@ class LocalAgentProtocol(Protocol):
         self._tablet_segment_text.clear()
 
     async def on_tablet_audio_out_text(self, msg: dict) -> None:
-        """处理平板上行的 JSON：当前只处理 tts_failed。"""
+        """处理平板上行的 JSON：tts_failed / tts_client_metric。"""
         if not isinstance(msg, dict):
             return
         mtype = msg.get("type")
+        if mtype == "tts_client_metric":
+            seg_id = msg.get("segment_id")
+            metric = msg.get("metric", "unknown")
+            fetch_ms = float(msg.get("fetch_ms") or -1)
+            server_to_first_ms = float(msg.get("server_to_first_ms") or -1)
+            chunk_bytes = int(msg.get("chunk_bytes") or 0)
+            logger.info(
+                "[TTS/direct/client] seg=%s metric=%s fetch首块=%.0fms 服务端下发→首块=%.0fms chunk=%dB",
+                seg_id, metric, fetch_ms, server_to_first_ms, chunk_bytes,
+            )
+            return
         if mtype != "tts_failed":
             logger.debug("[TTS/direct] 收到未知上行 type=%s", mtype)
             return
@@ -786,6 +797,7 @@ class LocalAgentProtocol(Protocol):
                 "segment_id": seg_id,
                 "text": seg,
                 "voice": voice,
+                "server_sent_ms": int(time.time() * 1000),
             }
             try:
                 push_t0 = time.perf_counter()
