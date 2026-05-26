@@ -1,5 +1,9 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+.hidden {
+  display: none !important;
+}
+
 html, body {
   width: 100%;
   height: 100%;
@@ -62,6 +66,35 @@ html, body {
   color: #ff6d6d;
 }
 
+.topbar-btn {
+  margin-left: 0;
+  min-width: 72px;
+}
+
+.topbar-btn.active,
+.nofly-fab.active,
+#btn-nofly-arm.active {
+  background: rgba(255, 82, 82, 0.22);
+  border-color: rgba(255, 120, 120, 0.75);
+  color: #ffd7d7;
+}
+
+.nofly-fab {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 11;
+  display: none;
+  margin-left: 0;
+  background: rgba(255, 82, 82, 0.18);
+  border-color: rgba(255, 120, 120, 0.55);
+  color: #ffd7d7;
+}
+
+.embedded .nofly-fab {
+  display: block;
+}
+
 /* ===== Canvas ===== */
 #slam-canvas {
   flex: 1;
@@ -73,6 +106,7 @@ html, body {
 /* ===== 底部状态栏 ===== */
 .slam-statusbar {
   display: flex;
+  align-items: center;
   gap: 24px;
   padding: 8px 16px;
   background: rgba(12, 16, 24, 0.85);
@@ -80,4 +114,151 @@ html, body {
   font-size: 12px;
   color: #8aa0b8;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.slam-btn {
+  margin-left: auto;
+  background: rgba(126, 184, 255, 0.15);
+  color: #cfe0f5;
+  border: 1px solid rgba(126, 184, 255, 0.4);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.slam-btn:hover { background: rgba(126, 184, 255, 0.25); }
+
+/* ===== 禁飞区面板 ===== */
+.nofly-panel {
+  position: absolute;
+  top: 58px;
+  right: 16px;
+  width: min(340px, calc(100vw - 32px));
+  max-height: calc(100vh - 128px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  z-index: 9;
+  overflow: hidden;
+  background: rgba(12, 16, 24, 0.9);
+  border: 1px solid rgba(255, 120, 120, 0.28);
+  border-radius: 6px;
+  backdrop-filter: blur(8px);
+}
+
+.embedded .nofly-panel {
+  top: 16px;
+}
+
+.nofly-panel.hidden {
+  display: none;
+}
+
+.nofly-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #ffd7d7;
+  font-size: 13px;
+}
+
+.nofly-panel-head .slam-btn {
+  margin-left: 0;
+}
+
+.nofly-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.nofly-empty {
+  padding: 12px 4px;
+  color: #7f8fa3;
+  font-size: 12px;
+}
+
+.nofly-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(255, 82, 82, 0.08);
+  border: 1px solid rgba(255, 120, 120, 0.18);
+  border-radius: 6px;
+}
+
+.nofly-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nofly-name {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 7px;
+  color: #e7eef8;
+  background: rgba(3, 6, 12, 0.55);
+  border: 1px solid rgba(126, 184, 255, 0.22);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.nofly-delete {
+  margin-left: 0;
+  color: #ffd7d7;
+  background: rgba(255, 82, 82, 0.14);
+  border-color: rgba(255, 120, 120, 0.45);
+}
+
+.nofly-range {
+  display: grid;
+  grid-template-columns: 42px 1fr 52px;
+  align-items: center;
+  gap: 8px;
+  color: #9fb0c6;
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.nofly-range input[type="range"] {
+  width: 100%;
+  accent-color: #ff6d6d;
+}
+
+.nofly-meta {
+  color: #7f8fa3;
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 760px) {
+  .slam-topbar {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .slam-topbar .title {
+    font-size: 13px;
+  }
+
+  .slam-statusbar {
+    gap: 10px;
+    padding: 7px 10px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .nofly-panel {
+    right: 10px;
+    left: 10px;
+    width: auto;
+  }
 }

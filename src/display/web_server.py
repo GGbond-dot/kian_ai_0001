@@ -16,7 +16,7 @@ import wave
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -43,6 +43,7 @@ class WebServer:
         self._server = None
         self._command_callback: Optional[Callable] = None
         self._audio_in_callback: Optional[Callable] = None
+        self._nofly_zone_callback: Optional[Callable] = None
         # 平板回报 tts_failed 等上行 JSON 的回调
         # 签名: async (msg: dict) -> None
         self._audio_out_text_callback: Optional[Callable] = None
@@ -60,6 +61,8 @@ class WebServer:
             "button_text": "开始对话",
             "auto_mode": False,
         }
+        self._nofly_zones: list[dict[str, Any]] = []
+        self._nofly_updated_at = 0.0
 
         self._setup_routes()
 
@@ -82,9 +85,56 @@ class WebServer:
         """
         self._audio_in_callback = callback
 
+    def set_nofly_zone_callback(self, callback: Callable) -> None:
+        """设置禁飞区下发回调.
+
+        callback 签名: async (payload: dict) -> dict | None
+        """
+        self._nofly_zone_callback = callback
+
     def update_state(self, key: str, value: Any) -> None:
         """更新状态快照中的某个字段."""
         self._state[key] = value
+
+    
+    def _validate_nofly_zones(zones: Any) -> list[dict[str, Any]]:
+        if not isinstance(zones, list):
+            raise ValueError("zones_must_be_list")
+
+        normalized: list[dict[str, Any]] = []
+        for index, zone in enumerate(zones):
+            if not isinstance(zone, dict):
+                raise ValueError(f"zone_{index}_must_be_object")
+            try:
+                min_x = float(zone["minX"])
+                max_x = float(zone["maxX"])
+                min_y = float(zone["minY"])
+                max_y = float(zone["maxY"])
+                z_min = float(zone["zMin"])
+                z_max = float(zone["zMax"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"zone_{index}_invalid_numeric_fields") from exc
+
+            if min_x > max_x:
+                min_x, max_x = max_x, min_x
+            if min_y > max_y:
+                min_y, max_y = max_y, min_y
+            if z_min > z_max:
+                z_min, z_max = z_max, z_min
+            if max_x - min_x <= 0 or max_y - min_y <= 0:
+                raise ValueError(f"zone_{index}_empty_rect")
+
+            normalized.append({
+                "id": str(zone.get("id") or f"zone-{index + 1}"),
+                "name": str(zone.get("name") or f"禁飞区 {index + 1}"),
+                "minX": min_x,
+                "maxX": max_x,
+                "minY": min_y,
+                "maxY": max_y,
+                "zMin": z_min,
+                "zMax": z_max,
+            })
+        return normalized
 
     # ===================== 路由 =====================
 
@@ -120,6 +170,56 @@ class WebServer:
                 "url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
                 "model": "qwen3-tts-flash",
                 "voice": "Cherry",
+            }
+
+        @app.get("/api/noflyzone")
+        async def get_noflyzone():
+            return {
+                "ok": True,
+                "zones": self._nofly_zones,
+                "count": len(self._nofly_zones),
+                "updated_at": self._nofly_updated_at,
+                "ros_publish_configured": self._nofly_zone_callback is not None,
+            }
+
+        @app.post("/api/noflyzone")
+        async def post_noflyzone(request: Request):
+            try:
+                payload = await request.json()
+                zones = self._validate_nofly_zones(payload.get("zones", []))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            except Exception as exc:
+                logger.warning("禁飞区 payload 解析失败: %s", exc)
+                return {"ok": False, "error": "invalid_json"}
+
+            normalized = {
+                "zones": zones,
+                "count": len(zones),
+                "frame_id": payload.get("frame_id") or "a/camera_init",
+                "source": payload.get("source") or "slam_web",
+                "updated_at": time.time(),
+            }
+            self._nofly_zones = zones
+            self._nofly_updated_at = normalized["updated_at"]
+
+            publish_result = {"configured": False, "published": False}
+            if self._nofly_zone_callback is not None:
+                try:
+                    result = self._nofly_zone_callback(normalized)
+                    if asyncio.iscoroutine(result):
+                        result = await result
+                    publish_result = result or {"configured": True, "published": False}
+                except Exception as exc:
+                    logger.error("禁飞区下发回调失败: %s", exc, exc_info=True)
+                    return {"ok": False, "error": "publish_failed", "detail": str(exc)}
+
+            logger.info("禁飞区已接收: count=%d frame_id=%s publish=%s", len(zones), normalized["frame_id"], publish_result)
+            return {
+                "ok": True,
+                "count": len(zones),
+                "updated_at": self._nofly_updated_at,
+                "publish": publish_result,
             }
 
         # 静态文件

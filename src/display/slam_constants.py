@@ -8,9 +8,9 @@ SLAM Web Viewer — 配置常量集中点.
 # ===================== ROS Topic 名称 =====================
 # 来自 rviz 配置 (drone_0 多机命名)
 SLAM_TOPIC_MAP = "/a/Laser_map"                    # PointCloud2 — 累积地图
-SLAM_TOPIC_SCAN = "/a/drone_0_cloud_registered"    # PointCloud2 — 当前帧 registered 点云
-SLAM_TOPIC_ODOM = "/a/drone_0_Odometry"            # nav_msgs/Odometry — 当前位姿
-SLAM_TOPIC_PATH = "/a/path"                        # nav_msgs/Path — 历史轨迹
+SLAM_TOPIC_SCAN = "/a/drone_0_cloud_registered_world"  # PointCloud2 — 当前帧 registered 点云
+SLAM_TOPIC_ODOM = "/a/drone_0_Odometry_world"          # nav_msgs/Odometry — 当前位姿
+SLAM_TOPIC_PATH = "/a/path_world"                      # nav_msgs/Path — 历史轨迹
 
 # ===================== 坐标系 =====================
 # Fixed Frame 从 rviz 配置读出

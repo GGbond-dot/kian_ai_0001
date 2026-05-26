@@ -10,6 +10,18 @@
       document.documentElement.classList.add('embedded');
     }
   </script>
+  <script>
+    window.SLAM_CONFIG = {
+      baseMapFile: 'global_map_ds.pcd',
+      baseMapTransform: null,
+      enableVoxelInfill: true,
+      voxelInfillSize: 0.1,
+      accumulateVoxelSize: 0.05,
+      accumulateMaxPoints: 150000,
+      enableNoFlyZoneDraw: true,
+      lowPerfMode: false,
+    };
+  </script>
 </head>
 <body>
 
@@ -18,16 +30,31 @@
   <div class="slam-topbar">
     <a class="back-link" href="/">← 返回</a>
     <div class="title">SLAM Viewer</div>
+    <button id="btn-nofly-draw" class="slam-btn topbar-btn" type="button">禁飞区</button>
     <div class="conn-badge disconnected">OFFLINE</div>
   </div>
 
   <canvas id="slam-canvas"></canvas>
 
+  <button id="btn-nofly-fab" class="slam-btn nofly-fab" type="button">禁飞区</button>
+
+  <div id="nofly-panel" class="nofly-panel hidden">
+    <div class="nofly-panel-head">
+      <span>禁飞区</span>
+      <button id="btn-nofly-arm" class="slam-btn" type="button">开始框选</button>
+      <button id="btn-nofly-send" class="slam-btn" type="button">下发</button>
+      <button id="btn-nofly-clear" class="slam-btn" type="button">清空</button>
+    </div>
+    <div id="nofly-list" class="nofly-list"></div>
+  </div>
+
   <div class="slam-statusbar">
-    <span id="stat-map">地图点: -</span>
-    <span id="stat-scan">实时点: -</span>
+    <span id="stat-base">基底: -</span>
+    <span id="stat-map">累积: -</span>
+    <span id="stat-scan">实时: -</span>
     <span id="stat-pose">位姿: -</span>
     <span id="stat-fps">FPS: -</span>
+    <button id="btn-clear-accum" class="slam-btn">清除累积</button>
   </div>
 
 </div>
