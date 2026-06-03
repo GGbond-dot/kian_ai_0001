@@ -20,6 +20,11 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.ros.grasp_task_bridge import (
+    GRASP_DEFAULT_INTERRUPT_MODE,
+    GRASP_GOAL_TYPE_PICKUP,
+    GRASP_GOAL_Z,
+)
 from src.utils.logging_config import get_logger
 from src.utils.resource_finder import find_assets_dir
 
@@ -64,6 +69,11 @@ class WebServer:
         self._nofly_zones: list[dict[str, Any]] = []
         self._nofly_updated_at = 0.0
 
+        # 抓取任务 (单目标,框选中心 cx/cy + 常量 z)
+        self._grasp_task: Optional[dict[str, Any]] = None
+        self._grasp_updated_at = 0.0
+        self._grasp_task_callback: Optional[Callable] = None
+
         self._setup_routes()
 
     def set_command_callback(self, callback: Callable) -> None:
@@ -92,12 +102,20 @@ class WebServer:
         """
         self._nofly_zone_callback = callback
 
+    def set_grasp_task_callback(self, callback: Callable) -> None:
+        """设置抓取任务下发回调.
+
+        callback 签名: async (payload: dict) -> dict | None
+        payload 含 cx/cy/z/goal_type/interrupt_mode/frame_id/source/updated_at
+        """
+        self._grasp_task_callback = callback
+
     def update_state(self, key: str, value: Any) -> None:
         """更新状态快照中的某个字段."""
         self._state[key] = value
 
     
-    def _validate_nofly_zones(zones: Any) -> list[dict[str, Any]]:
+    def _validate_nofly_zones(self, zones: Any) -> list[dict[str, Any]]:
         if not isinstance(zones, list):
             raise ValueError("zones_must_be_list")
 
@@ -135,6 +153,57 @@ class WebServer:
                 "zMax": z_max,
             })
         return normalized
+
+    def _validate_grasp_task(self, payload: Any) -> dict[str, Any]:
+        """校验前端框选矩形并塌缩成中心点 (cx, cy)。
+
+        前端传矩形 (与禁飞区前后端职责一致),后端算中心。z 用常量,
+        规划器忽略 (见设计文档 §三)。
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("payload_must_be_object")
+        try:
+            min_x = float(payload["minX"])
+            max_x = float(payload["maxX"])
+            min_y = float(payload["minY"])
+            max_y = float(payload["maxY"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("invalid_numeric_fields") from exc
+
+        if min_x > max_x:
+            min_x, max_x = max_x, min_x
+        if min_y > max_y:
+            min_y, max_y = max_y, min_y
+        if max_x - min_x <= 0 or max_y - min_y <= 0:
+            raise ValueError("empty_rect")
+
+        cx = (min_x + max_x) / 2
+        cy = (min_y + max_y) / 2
+
+        interrupt_mode_raw = payload.get("interrupt_mode", GRASP_DEFAULT_INTERRUPT_MODE)
+        try:
+            interrupt_mode = int(interrupt_mode_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid_interrupt_mode") from exc
+        if interrupt_mode not in (0, 1):
+            raise ValueError("interrupt_mode_out_of_range")
+
+        return {
+            "cx": cx,
+            "cy": cy,
+            "z": GRASP_GOAL_Z,
+            "goal_type": GRASP_GOAL_TYPE_PICKUP,
+            "interrupt_mode": interrupt_mode,
+            "frame_id": str(payload.get("frame_id") or "world"),
+            "source": str(payload.get("source") or "slam_web"),
+            "rect": {
+                "minX": min_x,
+                "maxX": max_x,
+                "minY": min_y,
+                "maxY": max_y,
+            },
+            "updated_at": time.time(),
+        }
 
     # ===================== 路由 =====================
 
@@ -219,6 +288,53 @@ class WebServer:
                 "ok": True,
                 "count": len(zones),
                 "updated_at": self._nofly_updated_at,
+                "publish": publish_result,
+            }
+
+        @app.get("/api/grasp_task")
+        async def get_grasp_task():
+            return {
+                "ok": True,
+                "task": self._grasp_task,
+                "updated_at": self._grasp_updated_at,
+                "ros_publish_configured": self._grasp_task_callback is not None,
+            }
+
+        @app.post("/api/grasp_task")
+        async def post_grasp_task(request: Request):
+            try:
+                payload = await request.json()
+                normalized = self._validate_grasp_task(payload)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            except Exception as exc:
+                logger.warning("抓取任务 payload 解析失败: %s", exc)
+                return {"ok": False, "error": "invalid_json"}
+
+            self._grasp_task = normalized
+            self._grasp_updated_at = normalized["updated_at"]
+
+            publish_result = {"configured": False, "published": False}
+            if self._grasp_task_callback is not None:
+                try:
+                    result = self._grasp_task_callback(normalized)
+                    if asyncio.iscoroutine(result):
+                        result = await result
+                    publish_result = result or {"configured": True, "published": False}
+                except Exception as exc:
+                    logger.error("抓取任务下发回调失败: %s", exc, exc_info=True)
+                    return {"ok": False, "error": "publish_failed", "detail": str(exc)}
+
+            logger.info(
+                "抓取任务已接收: cx=%.3f cy=%.3f goal_type=%d interrupt=%d publish=%s",
+                normalized["cx"], normalized["cy"],
+                normalized["goal_type"], normalized["interrupt_mode"],
+                publish_result,
+            )
+            return {
+                "ok": True,
+                "task": normalized,
+                "updated_at": self._grasp_updated_at,
                 "publish": publish_result,
             }
 

@@ -4,11 +4,88 @@ import os
 import signal
 import sys
 
-# ROS2 通信环境变量（与开发板飞控同域）
-# 必须在 import rclpy 之前 setdefault，否则进程 init 后修改无效
-os.environ.setdefault("ROS_DOMAIN_ID", "10")
-os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
-os.environ.pop("CYCLONEDDS_URI", None)
+# ── Re-exec guard ───────────────────────────────────────────────────────────────
+# LD_LIBRARY_PATH must be set BEFORE the process starts (ld.so reads it at startup).
+# Setting it via os.environ inside Python does NOT affect already-running dlopen.
+# We re-exec the process with the full ROS 2 + local workspace environment so that
+# typesupport .so files (drone_task_interfaces etc.) can be loaded by rclpy.
+_RUNTIME_SENTINEL = "AIAGENT_ROS_ENV_READY"
+
+if os.environ.get(_RUNTIME_SENTINEL) != "1":
+    _project_dir = os.path.dirname(os.path.abspath(__file__))
+    _py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+    _env = dict(os.environ)
+    _env[_RUNTIME_SENTINEL] = "1"
+    _env.setdefault("ROS_DOMAIN_ID", "10")
+    _env.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+    _env.pop("CYCLONEDDS_URI", None)
+
+    # ROS 2 Humble system installation
+    _ros_distro = "/opt/ros/humble"
+    if os.path.isdir(_ros_distro):
+        for _key, _sub in [
+            ("LD_LIBRARY_PATH", "lib"),
+            ("PATH", "bin"),
+        ]:
+            _path = os.path.join(_ros_distro, _sub)
+            if os.path.isdir(_path):
+                _prev = _env.get(_key, "")
+                _env[_key] = os.pathsep.join([p for p in [_path, _prev] if p])
+        for _py_sub in [
+            os.path.join("local", "lib", _py_ver, "dist-packages"),
+            os.path.join("lib", _py_ver, "dist-packages"),
+        ]:
+            _py_path = os.path.join(_ros_distro, _py_sub)
+            if os.path.isdir(_py_path):
+                _prev = _env.get("PYTHONPATH", "")
+                _env["PYTHONPATH"] = os.pathsep.join([p for p in [_py_path, _prev] if p])
+        _prev = _env.get("AMENT_PREFIX_PATH", "")
+        _env["AMENT_PREFIX_PATH"] = os.pathsep.join([p for p in [_ros_distro, _prev] if p])
+
+    # Local ros2_ws/install workspace (drone_task_interfaces etc.)
+    _ros2_ws = os.path.join(_project_dir, "ros2_ws", "install")
+    if os.path.isdir(_ros2_ws):
+        for _entry in os.listdir(_ros2_ws):
+            _pkg_root = os.path.join(_ros2_ws, _entry)
+            if not os.path.isdir(_pkg_root):
+                continue
+            # Python dist-packages
+            _pkg_py = os.path.join(_pkg_root, "local", "lib", _py_ver, "dist-packages")
+            if os.path.isdir(_pkg_py):
+                _prev = _env.get("PYTHONPATH", "")
+                _env["PYTHONPATH"] = os.pathsep.join([p for p in [_pkg_py, _prev] if p])
+            # .so files inside dist-packages/<pkg>/ (typesupport)
+            _pkg_so = os.path.join(_pkg_root, "local", "lib", _py_ver, "dist-packages", _entry)
+            if os.path.isdir(_pkg_so):
+                _prev = _env.get("LD_LIBRARY_PATH", "")
+                _env["LD_LIBRARY_PATH"] = os.pathsep.join([p for p in [_pkg_so, _prev] if p])
+            # Shared libraries in lib/
+            _pkg_lib = os.path.join(_pkg_root, "lib")
+            if os.path.isdir(_pkg_lib):
+                _prev = _env.get("LD_LIBRARY_PATH", "")
+                _env["LD_LIBRARY_PATH"] = os.pathsep.join([p for p in [_pkg_lib, _prev] if p])
+        # AMENT_PREFIX_PATH for workspace-level discovery
+        _prev = _env.get("AMENT_PREFIX_PATH", "")
+        _env["AMENT_PREFIX_PATH"] = os.pathsep.join([p for p in [_ros2_ws, _prev] if p])
+
+    os.execve(sys.executable, [sys.executable] + sys.argv, _env)
+
+# ── End re-exec guard ───────────────────────────────────────────────────────────
+
+# Post-re-exec: inject local workspace Python packages into sys.path
+# (PYTHONPATH from the re-exec already covers this, but sys.path insertion is a
+# belt-and-suspenders safeguard for subprocess / embedded-interpreter edge cases.)
+_ros2_ws_install = os.path.join(os.path.dirname(__file__), "ros2_ws", "install")
+if os.path.isdir(_ros2_ws_install):
+    for _entry in os.listdir(_ros2_ws_install):
+        _pkg_root = os.path.join(_ros2_ws_install, _entry)
+        _pkg_python = os.path.join(
+            _pkg_root, "local", "lib",
+            f"python{sys.version_info.major}.{sys.version_info.minor}", "dist-packages",
+        )
+        if os.path.isdir(_pkg_python) and _pkg_python not in sys.path:
+            sys.path.insert(0, _pkg_python)
 
 from src.application import Application
 from src.utils.logging_config import get_logger, setup_logging

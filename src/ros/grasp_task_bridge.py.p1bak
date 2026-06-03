@@ -1,0 +1,80 @@
+"""Grasp task bridge scaffold.
+
+P1 框架: Web 前端框选 → 后端塌缩成中心点 (cx, cy) → 这里保留 ROS 下发边界。
+当前不创建 ROS publisher,等队友 traj_utils workspace 部署确认后(P2)
+再 import traj_utils.msg.GoalWithType 并实发 /goal_with_type。
+
+设计参考: project_markdown/slam_grasp_region_design.md §4.5
+"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from src.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+GOAL_WITH_TYPE_TOPIC = "/goal_with_type"
+GRASP_GOAL_Z = 1.0                  # 与队友 planning_z 对齐,仅占位,规划器忽略 goal.z
+GRASP_GOAL_TYPE_PICKUP = 1          # GoalWithType.goal_type = 1 (PICKUP)
+GRASP_DEFAULT_INTERRUPT_MODE = 1    # 1=抢断立即执行 / 0=排队
+
+
+class GraspTaskBridge:
+    def __init__(self, topic: str = GOAL_WITH_TYPE_TOPIC):
+        self.topic = topic
+        self._latest_task: Optional[dict[str, Any]] = None
+        self._available = False
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    async def start(self) -> None:
+        """启动占位 bridge。
+
+        当前不创建 ROS publisher,与禁飞区同策略,避免在 traj_utils 部署确认前
+        发出错误类型。P2 在此处接入 rclpy:
+            import rclpy
+            from traj_utils.msg import GoalWithType
+            建 Node + publisher(参考 drone_command_bridge 的 executor/线程结构)
+        """
+        self._available = False
+        logger.info(
+            "GraspTaskBridge: P1 scaffold ready, ROS publish disabled until traj_utils confirmed topic=%s",
+            self.topic,
+        )
+
+    async def stop(self) -> None:
+        self._available = False
+
+    async def submit(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """接收后端校验后的抓取任务 payload (含 cx, cy, z, goal_type, interrupt_mode)。"""
+        self._latest_task = payload
+        logger.info(
+            "GraspTaskBridge: received grasp task cx=%.3f cy=%.3f z=%.3f goal_type=%d interrupt=%d, ROS publish pending traj_utils",
+            payload.get("cx", 0.0),
+            payload.get("cy", 0.0),
+            payload.get("z", 0.0),
+            payload.get("goal_type", GRASP_GOAL_TYPE_PICKUP),
+            payload.get("interrupt_mode", GRASP_DEFAULT_INTERRUPT_MODE),
+        )
+        return {
+            "configured": True,
+            "published": False,
+            "topic": self.topic,
+            "reason": "traj_utils_pending",
+        }
+
+    def latest_task(self) -> Optional[dict[str, Any]]:
+        return self._latest_task
+
+
+_bridge: Optional[GraspTaskBridge] = None
+
+
+def get_grasp_task_bridge() -> GraspTaskBridge:
+    global _bridge
+    if _bridge is None:
+        _bridge = GraspTaskBridge()
+    return _bridge

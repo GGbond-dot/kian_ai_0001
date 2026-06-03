@@ -19,6 +19,7 @@
       accumulateVoxelSize: 0.05,
       accumulateMaxPoints: 150000,
       enableNoFlyZoneDraw: true,
+      enableGraspTask: true,
       lowPerfMode: false,
     };
   </script>
@@ -31,12 +32,14 @@
     <a class="back-link" href="/">← 返回</a>
     <div class="title">SLAM Viewer</div>
     <button id="btn-nofly-draw" class="slam-btn topbar-btn" type="button">禁飞区</button>
+    <button id="btn-grasp-draw" class="slam-btn topbar-btn" type="button">抓取</button>
     <div class="conn-badge disconnected">OFFLINE</div>
   </div>
 
   <canvas id="slam-canvas"></canvas>
 
   <button id="btn-nofly-fab" class="slam-btn nofly-fab" type="button">禁飞区</button>
+  <button id="btn-grasp-fab" class="slam-btn grasp-fab" type="button">抓取</button>
 
   <div id="nofly-panel" class="nofly-panel hidden">
     <div class="nofly-panel-head">
@@ -46,6 +49,16 @@
       <button id="btn-nofly-clear" class="slam-btn" type="button">清空</button>
     </div>
     <div id="nofly-list" class="nofly-list"></div>
+  </div>
+
+  <div id="grasp-panel" class="grasp-panel hidden">
+    <div class="grasp-panel-head">
+      <span>抓取目标</span>
+      <button id="btn-grasp-arm" class="slam-btn" type="button">开始框选</button>
+      <button id="btn-grasp-send" class="slam-btn" type="button">下发</button>
+      <button id="btn-grasp-clear" class="slam-btn" type="button">清除</button>
+    </div>
+    <div id="grasp-info" class="grasp-info">暂无目标,点击"开始框选"在地图上框出抓取区域,后端会取中心点下发。</div>
   </div>
 
   <div class="slam-statusbar">

@@ -5,6 +5,7 @@ from .tools import (
     drone_status,
     query_status,
     mapping_view,
+    dispatch_selected_goal,
 )
 
 
@@ -59,6 +60,20 @@ class RobotDispatchManager:
             ),
             PropertyList([]),
             mapping_view,
+        ))
+
+        add_tool((
+            "robot.dispatch_goal",
+            (
+                "下发已框选目标工具。当操作员在地图上框选好目标后说「去抓取」「去这里」"
+                "「执行框选任务」「下发目标」「去拿」等指令时调用。"
+                "把 Web 地图已框选的中心点交给终端 A* 全局规划并发布给无人机。"
+                "goal_type：0=普通导航 1=抓取 2=放置 3=降落，默认 1（抓取）。"
+            ),
+            PropertyList([
+                Property("goal_type", PropertyType.INTEGER, default_value=1),
+            ]),
+            dispatch_selected_goal,
         ))
 
 

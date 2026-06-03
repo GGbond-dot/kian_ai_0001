@@ -110,6 +110,10 @@ scene.add(poseArrow);
 const noFlyGroup = new THREE.Group();
 scene.add(noFlyGroup);
 
+// ===== 抓取目标 (P1: 框选 → 后端塌缩成中心点) =====
+const graspGroup = new THREE.Group();
+scene.add(graspGroup);
+
 // ===================== 状态条 =====================
 const statBase = document.getElementById('stat-base');
 const statMap  = document.getElementById('stat-map');
@@ -125,6 +129,13 @@ const btnNoFlySend = document.getElementById('btn-nofly-send');
 const btnNoFlyArm = document.getElementById('btn-nofly-arm');
 const noFlyPanel = document.getElementById('nofly-panel');
 const noFlyList = document.getElementById('nofly-list');
+const btnGraspDraw = document.getElementById('btn-grasp-draw');
+const btnGraspFab = document.getElementById('btn-grasp-fab');
+const btnGraspArm = document.getElementById('btn-grasp-arm');
+const btnGraspSend = document.getElementById('btn-grasp-send');
+const btnGraspClear = document.getElementById('btn-grasp-clear');
+const graspPanel = document.getElementById('grasp-panel');
+const graspInfo = document.getElementById('grasp-info');
 btnClearAccum?.addEventListener('click', () => {
   mapAccum.clear();
   rebuildMapGeom();
@@ -216,27 +227,29 @@ async function sendNoFlyZones() {
 
 function createNoFlyObject(zone, preview = false) {
   const group = new THREE.Group();
+  // 立体禁飞区：半透明盒子（体积）+ 12 条棱线框（轮廓）。
+  // 盒子用单位 BoxGeometry，由 updateNoFlyObject 通过 scale 撑成实际 长×宽×高。
   const mesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1),
+    new THREE.BoxGeometry(1, 1, 1),
     new THREE.MeshBasicMaterial({
       color: 0xff4444,
-      opacity: preview ? 0.16 : 0.24,
+      opacity: preview ? 0.12 : 0.18,
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
     }),
   );
-  const line = new THREE.Line(
-    new THREE.BufferGeometry(),
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
     new THREE.LineBasicMaterial({
       color: preview ? 0xffaaaa : 0xff6666,
       transparent: true,
       opacity: preview ? 0.95 : 0.85,
     }),
   );
-  group.add(mesh, line);
+  group.add(mesh, edges);
   group.userData.mesh = mesh;
-  group.userData.line = line;
+  group.userData.edges = edges;
   group.userData.zoneId = zone.id;
   updateNoFlyObject(group, zone);
   return group;
@@ -247,26 +260,23 @@ function updateNoFlyObject(group, zone) {
   const maxX = Math.max(zone.minX, zone.maxX);
   const minY = Math.min(zone.minY, zone.maxY);
   const maxY = Math.max(zone.minY, zone.maxY);
+  // 高度方向（THREE z 轴 = 世界高度），由禁飞区的 zMin/zMax 决定盒子的厚度与垂直位置。
+  const zMin = Math.min(zone.zMin, zone.zMax);
+  const zMax = Math.max(zone.zMin, zone.zMax);
   const width = Math.max(NOFLY_MIN_SIZE, maxX - minX);
-  const height = Math.max(NOFLY_MIN_SIZE, maxY - minY);
+  const depth = Math.max(NOFLY_MIN_SIZE, maxY - minY);
+  const tall = Math.max(NOFLY_MIN_SIZE, zMax - zMin);
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
-  const z = 0.035;
+  const cz = (zMin + zMax) / 2;
 
   const mesh = group.userData.mesh;
-  mesh.position.set(cx, cy, z);
-  mesh.scale.set(width, height, 1);
+  mesh.position.set(cx, cy, cz);
+  mesh.scale.set(width, depth, tall);
 
-  const points = new Float32Array([
-    minX, minY, z + 0.005,
-    maxX, minY, z + 0.005,
-    maxX, maxY, z + 0.005,
-    minX, maxY, z + 0.005,
-    minX, minY, z + 0.005,
-  ]);
-  const line = group.userData.line;
-  line.geometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
-  line.geometry.computeBoundingSphere();
+  const edges = group.userData.edges;
+  edges.position.set(cx, cy, cz);
+  edges.scale.set(width, depth, tall);
 }
 
 function disposeNoFlyObject(group) {
@@ -366,6 +376,9 @@ function createHeightRow(zone, key, labelText) {
       else zone.zMin = zone.zMax;
     }
     value.textContent = `${zone[key].toFixed(1)}m`;
+    // 立体盒子按新高度实时长高/缩短
+    const obj = noFlyObjects.get(zone.id);
+    if (obj) updateNoFlyObject(obj, zone);
     saveNoFlyZones();
   });
   range.addEventListener('change', renderNoFlyList);
@@ -374,8 +387,10 @@ function createHeightRow(zone, key, labelText) {
   return row;
 }
 
-function setNoFlyPanelOpen(active) {
+function setNoFlyPanelOpen(active, keepView = false) {
   if (CFG.enableNoFlyZoneDraw === false) return;
+  // 两个绘制面板互斥(共享 savedView/相机), keepView=true 表示把视角让给即将打开的面板
+  if (active && isGraspPanelOpen) setGraspPanelOpen(false, true);
   isNoFlyPanelOpen = active;
   btnNoFlyDraw?.classList.toggle('active', active);
   btnNoFlyFab?.classList.toggle('active', active);
@@ -399,7 +414,7 @@ function setNoFlyPanelOpen(active) {
     forceTopDownCamera();
   } else {
     setNoFlyDrawMode(false);
-    if (savedView) {
+    if (!keepView && savedView) {
       camera.up.copy(savedView.up);
       camera.position.copy(savedView.position);
       controls.target.copy(savedView.target);
@@ -511,6 +526,311 @@ if (CFG.enableNoFlyZoneDraw === false) {
   canvas.addEventListener('pointerup', onNoFlyPointerUp, true);
   canvas.addEventListener('pointercancel', onNoFlyPointerUp, true);
   renderNoFlyZones();
+}
+
+// ===================== 抓取目标绘制 =====================
+// 与禁飞区职责一致: 前端框矩形并保存,后端塌缩成中心点 (cx, cy) 下发。
+// 只保留一个目标,再次框选覆盖上一个 (设计 §4.2)。
+const GRASP_STORAGE_KEY = 'aiagent.slam.graspTask.v1';
+const GRASP_MIN_SIZE = 0.05;
+const GRASP_DEFAULT_INTERRUPT_MODE = 1;
+
+const graspRaycaster = new THREE.Raycaster();
+let graspObject = null;
+const graspPreview = createGraspObject(
+  { minX: 0, maxX: 0, minY: 0, maxY: 0 },
+  true,
+);
+graspPreview.visible = false;
+scene.add(graspPreview);
+
+let graspTask = loadGraspTask();
+let isGraspPanelOpen = false;
+let isGraspDrawMode = false;
+let graspDragStart = null;
+
+function loadGraspTask() {
+  try {
+    const raw = localStorage.getItem(GRASP_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return isValidGraspTask(parsed) ? parsed : null;
+  } catch (e) {
+    console.warn('抓取任务读取失败:', e);
+    return null;
+  }
+}
+
+function isValidGraspTask(t) {
+  return t
+    && Number.isFinite(t.minX) && Number.isFinite(t.maxX)
+    && Number.isFinite(t.minY) && Number.isFinite(t.maxY);
+}
+
+function saveGraspTask() {
+  try {
+    if (graspTask) {
+      localStorage.setItem(GRASP_STORAGE_KEY, JSON.stringify(graspTask));
+    } else {
+      localStorage.removeItem(GRASP_STORAGE_KEY);
+    }
+  } catch (e) {
+    console.warn('抓取任务保存失败:', e);
+  }
+}
+
+async function sendGraspTask() {
+  if (!btnGraspSend) return;
+  if (!graspTask) {
+    const oldText = btnGraspSend.textContent;
+    btnGraspSend.textContent = '无目标';
+    setTimeout(() => { btnGraspSend.textContent = oldText; }, 1200);
+    return;
+  }
+  const oldText = btnGraspSend.textContent;
+  btnGraspSend.disabled = true;
+  btnGraspSend.textContent = '下发中';
+  try {
+    const resp = await fetch('/api/grasp_task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'slam_web',
+        frame_id: 'world',
+        minX: graspTask.minX,
+        maxX: graspTask.maxX,
+        minY: graspTask.minY,
+        maxY: graspTask.maxY,
+        interrupt_mode: graspTask.interrupt_mode ?? GRASP_DEFAULT_INTERRUPT_MODE,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+    btnGraspSend.textContent = data.publish?.published ? '已下发' : '已保存';
+    setTimeout(() => { btnGraspSend.textContent = oldText; }, 1200);
+  } catch (e) {
+    console.warn('抓取任务下发失败:', e);
+    btnGraspSend.textContent = '失败';
+    setTimeout(() => { btnGraspSend.textContent = oldText; }, 1600);
+  } finally {
+    btnGraspSend.disabled = false;
+  }
+}
+
+function createGraspObject(zone, preview = false) {
+  const group = new THREE.Group();
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0x44ff88,
+      opacity: preview ? 0.18 : 0.26,
+      transparent: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  const line = new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({
+      color: preview ? 0xaaffaa : 0x66ffaa,
+      transparent: true,
+      opacity: preview ? 0.95 : 0.9,
+    }),
+  );
+  // 中心点标记: 黄色小球,提示后端实际下发的就是这个点
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.06, 12, 8),
+    new THREE.MeshBasicMaterial({ color: preview ? 0xaaffaa : 0xffe066 }),
+  );
+  group.add(mesh, line, dot);
+  group.userData = { mesh, line, dot };
+  updateGraspObject(group, zone);
+  return group;
+}
+
+function updateGraspObject(group, zone) {
+  const minX = Math.min(zone.minX, zone.maxX);
+  const maxX = Math.max(zone.minX, zone.maxX);
+  const minY = Math.min(zone.minY, zone.maxY);
+  const maxY = Math.max(zone.minY, zone.maxY);
+  const width = Math.max(GRASP_MIN_SIZE, maxX - minX);
+  const height = Math.max(GRASP_MIN_SIZE, maxY - minY);
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  // 略高于禁飞区(0.035),避免共面 z-fight
+  const z = 0.04;
+
+  const { mesh, line, dot } = group.userData;
+  mesh.position.set(cx, cy, z);
+  mesh.scale.set(width, height, 1);
+
+  const points = new Float32Array([
+    minX, minY, z + 0.005,
+    maxX, minY, z + 0.005,
+    maxX, maxY, z + 0.005,
+    minX, maxY, z + 0.005,
+    minX, minY, z + 0.005,
+  ]);
+  line.geometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
+  line.geometry.computeBoundingSphere();
+
+  dot.position.set(cx, cy, z + 0.02);
+}
+
+function disposeGraspObject(group) {
+  for (const child of group.children) {
+    child.geometry?.dispose();
+    child.material?.dispose();
+  }
+}
+
+function renderGraspTask() {
+  if (graspObject) {
+    graspGroup.remove(graspObject);
+    disposeGraspObject(graspObject);
+    graspObject = null;
+  }
+  if (graspTask) {
+    graspObject = createGraspObject(graspTask);
+    graspGroup.add(graspObject);
+  }
+  renderGraspInfo();
+}
+
+function renderGraspInfo() {
+  if (!graspInfo) return;
+  if (!graspTask) {
+    graspInfo.textContent = '暂无目标,点击"开始框选"在地图上框出抓取区域,后端会取中心点下发。';
+    return;
+  }
+  const cx = (graspTask.minX + graspTask.maxX) / 2;
+  const cy = (graspTask.minY + graspTask.maxY) / 2;
+  graspInfo.textContent =
+    `中心 x=${cx.toFixed(3)}  y=${cy.toFixed(3)}\n` +
+    `矩形 x ${graspTask.minX.toFixed(2)}..${graspTask.maxX.toFixed(2)} / y ${graspTask.minY.toFixed(2)}..${graspTask.maxY.toFixed(2)}`;
+}
+
+function setGraspPanelOpen(active, keepView = false) {
+  if (CFG.enableGraspTask === false) return;
+  if (active && isNoFlyPanelOpen) setNoFlyPanelOpen(false, true);
+  isGraspPanelOpen = active;
+  btnGraspDraw?.classList.toggle('active', active);
+  btnGraspFab?.classList.toggle('active', active);
+  graspPanel?.classList.toggle('hidden', !active);
+
+  if (active) {
+    if (!savedView) {
+      savedView = {
+        position: camera.position.clone(),
+        target: controls.target.clone(),
+        up: camera.up.clone(),
+        enableRotate: controls.enableRotate,
+        mouseButtons: { ...controls.mouseButtons },
+        touches: { ...controls.touches },
+      };
+    }
+    controls.enableRotate = false;
+    controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+    controls.touches.ONE = THREE.TOUCH.PAN;
+    controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+    forceTopDownCamera();
+  } else {
+    setGraspDrawMode(false);
+    if (!keepView && savedView) {
+      camera.up.copy(savedView.up);
+      camera.position.copy(savedView.position);
+      controls.target.copy(savedView.target);
+      controls.enableRotate = savedView.enableRotate;
+      controls.mouseButtons = savedView.mouseButtons;
+      controls.touches = savedView.touches;
+      controls.update();
+      savedView = null;
+    }
+  }
+}
+
+function setGraspDrawMode(active) {
+  if (!isGraspPanelOpen && active) setGraspPanelOpen(true);
+  isGraspDrawMode = active;
+  btnGraspArm?.classList.toggle('active', active);
+  if (btnGraspArm) btnGraspArm.textContent = active ? '取消框选' : '开始框选';
+  if (!active) {
+    graspDragStart = null;
+    graspPreview.visible = false;
+  }
+}
+
+function graspZoneFromPoints(a, b) {
+  return {
+    minX: Math.min(a.x, b.x),
+    maxX: Math.max(a.x, b.x),
+    minY: Math.min(a.y, b.y),
+    maxY: Math.max(a.y, b.y),
+    interrupt_mode: graspTask?.interrupt_mode ?? GRASP_DEFAULT_INTERRUPT_MODE,
+  };
+}
+
+function onGraspPointerDown(event) {
+  if (!isGraspDrawMode || event.button !== 0) return;
+  const pt = screenToWorldXY(event, camera, canvas, graspRaycaster);
+  if (!pt) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  canvas.setPointerCapture?.(event.pointerId);
+  graspDragStart = pt.clone();
+  const zone = graspZoneFromPoints(graspDragStart, graspDragStart);
+  updateGraspObject(graspPreview, zone);
+  graspPreview.visible = true;
+}
+
+function onGraspPointerMove(event) {
+  if (!isGraspDrawMode || !graspDragStart) return;
+  const pt = screenToWorldXY(event, camera, canvas, graspRaycaster);
+  if (!pt) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const zone = graspZoneFromPoints(graspDragStart, pt);
+  updateGraspObject(graspPreview, zone);
+}
+
+function onGraspPointerUp(event) {
+  if (!isGraspDrawMode || !graspDragStart) return;
+  const pt = screenToWorldXY(event, camera, canvas, graspRaycaster);
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  canvas.releasePointerCapture?.(event.pointerId);
+  graspPreview.visible = false;
+
+  if (pt) {
+    const zone = graspZoneFromPoints(graspDragStart, pt);
+    if (zone.maxX - zone.minX >= GRASP_MIN_SIZE && zone.maxY - zone.minY >= GRASP_MIN_SIZE) {
+      graspTask = zone;  // 单目标: 覆盖上一个
+      saveGraspTask();
+      renderGraspTask();
+    }
+  }
+  graspDragStart = null;
+  setGraspDrawMode(false);
+}
+
+if (CFG.enableGraspTask === false) {
+  btnGraspDraw?.classList.add('hidden');
+  btnGraspFab?.classList.add('hidden');
+  graspPanel?.classList.add('hidden');
+} else {
+  btnGraspDraw?.addEventListener('click', () => setGraspPanelOpen(!isGraspPanelOpen));
+  btnGraspFab?.addEventListener('click', () => setGraspPanelOpen(!isGraspPanelOpen));
+  btnGraspArm?.addEventListener('click', () => setGraspDrawMode(!isGraspDrawMode));
+  btnGraspSend?.addEventListener('click', sendGraspTask);
+  btnGraspClear?.addEventListener('click', () => {
+    graspTask = null;
+    saveGraspTask();
+    renderGraspTask();
+  });
+  canvas.addEventListener('pointerdown', onGraspPointerDown, true);
+  canvas.addEventListener('pointermove', onGraspPointerMove, true);
+  canvas.addEventListener('pointerup', onGraspPointerUp, true);
+  canvas.addEventListener('pointercancel', onGraspPointerUp, true);
+  renderGraspTask();
 }
 
 // ===================== 上色: 高度 → rainbow =====================

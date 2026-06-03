@@ -219,3 +219,28 @@ async def mapping_view(args: dict) -> str:
     """
     _ = args
     return "地图正在实时更新，直接看屏幕就好"
+
+
+async def dispatch_selected_goal(args: dict) -> str:
+    """把 Web 地图上已框选的目标点下发给无人机（终端侧 A* 规划 + 发布）。
+
+    依赖：用户已经在 /slam 地图框选过目标（存进 goal_selection_store）。
+    goal_type: 0=普通导航, 1=抓取(pickup), 2=放置(place), 3=降落(land)，默认 1。
+    """
+    try:
+        goal_type = int(args.get("goal_type", 1))
+    except (TypeError, ValueError):
+        goal_type = 1
+
+    try:
+        from src.plugins.ros_terminal import get_ros_terminal_plugin
+        plugin = get_ros_terminal_plugin()
+        result = await plugin.dispatch_selected_goal(goal_type)
+        _logger.info("[ros_terminal] dispatch goal_type=%d -> %s", goal_type, result)
+        return f"已下发目标（goal_type={goal_type}）：{result}"
+    except RuntimeError as exc:
+        # 未框选 / 规划器未就绪 等可预期错误，直接把原因回给用户
+        return f"下发失败：{exc}"
+    except Exception as exc:  # noqa: BLE001
+        _logger.error("[ros_terminal] dispatch 异常: %s", exc, exc_info=True)
+        return f"下发异常：{exc}"

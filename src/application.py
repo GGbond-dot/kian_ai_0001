@@ -104,6 +104,10 @@ class Application:
             # 插件会自动按 priority 排序：
             # AudioPlugin(10) -> McpPlugin(20) -> WakeWordPlugin(30) -> CalendarPlugin(40)
             # -> IoTPlugin(50) -> UIPlugin(60) -> ShortcutsPlugin(70)
+            # RosTerminalPlugin(15)：地面站全局规划 + 框选目标下发（依赖 ros2_ws 已编译）
+            # 用单例，确保 MCP 调度工具拿到的是同一个挂了 ROS 节点的实例
+            from src.plugins.ros_terminal import get_ros_terminal_plugin
+
             self.plugins.register(
                 McpPlugin(),
                 IoTPlugin(),
@@ -112,6 +116,7 @@ class Application:
                 CalendarPlugin(),
                 UIPlugin(mode=mode),
                 ShortcutsPlugin(),
+                get_ros_terminal_plugin(),
             )
             await self.plugins.setup_all(self)
             # 启动后广播初始状态，确保 UI 就绪时能看到“待命”

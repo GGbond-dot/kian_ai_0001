@@ -11,6 +11,7 @@ from src.display.base_display import BaseDisplay
 from src.display.slam_bridge import SlamBridge
 from src.display.web_server import WebServer
 from src.ros.drone_command_bridge import get_drone_command_bridge
+from src.ros.grasp_task_bridge import get_grasp_task_bridge
 from src.ros.nofly_zone_bridge import get_nofly_zone_bridge
 
 
@@ -23,6 +24,7 @@ class WebDisplay(BaseDisplay):
         self.slam_bridge = SlamBridge(self.server)
         self.drone_bridge = get_drone_command_bridge()
         self.nofly_bridge = get_nofly_zone_bridge()
+        self.grasp_bridge = get_grasp_task_bridge()
 
         # 自动模式状态
         self.auto_mode = False
@@ -40,6 +42,7 @@ class WebDisplay(BaseDisplay):
         # 注册控制指令处理
         self.server.set_command_callback(self._handle_command)
         self.server.set_nofly_zone_callback(self.nofly_bridge.submit)
+        self.server.set_grasp_task_callback(self.grasp_bridge.submit)
 
     def set_audio_in_callback(self, callback: Callable) -> None:
         """注册外部 PCM 流回调（来自平板 WebView 的 /ws/audio_in）。
@@ -105,6 +108,7 @@ class WebDisplay(BaseDisplay):
         await self.slam_bridge.start()
         await self.drone_bridge.start()
         await self.nofly_bridge.start()
+        await self.grasp_bridge.start()
         await self.server.start()
 
     async def close(self):
@@ -112,6 +116,7 @@ class WebDisplay(BaseDisplay):
         self.logger.info("WebDisplay 关闭中...")
         await self.drone_bridge.stop()
         await self.nofly_bridge.stop()
+        await self.grasp_bridge.stop()
         await self.slam_bridge.stop()
         await self.server.stop()
 
