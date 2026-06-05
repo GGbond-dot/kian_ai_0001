@@ -21,10 +21,13 @@
 | 长期(§I.P3) | ⏸ 未开始 | 多飞机/违规检测,远期 |
 
 **预编译自测**(PC Node 端,不代表开发板 WebView 行为,仅作算法正确性 sanity check):
-- `parsePCD(global_map_ds.pcd).pointCount === 5587` ✅
-- bbox: x ∈ [-5.44, 36.78], y ∈ [-22.52, 1.92], z ∈ [-0.43, 23.44] ✅
-- `voxelInfill(positions, 0.1)` 输出 54,440 虚拟点 ✅(预期 30k-80k)
 - `VoxelAccumulator` 去重 + cap=15w eviction ✅
+
+**⚠️ 2026-06-03 换图更新(重要)**:`global_map_ds.pcd` 已替换为新场地数据,格式/坐标系不变,但**规模大幅变大**。本文中所有基于旧 demo(5587 点)的数字已过时,以下为新图实测:
+- `pointCount = 21404`(旧 5587);文件 342,652 字节(旧 89,578)
+- bbox: x ∈ [-89.98, 22.41]、y ∈ [-81.14, 13.56]、z ∈ [-3.54, 6.39](跨度约 112m × 95m × 10m,旧图才 ~42m × 24m)
+- `voxelInfill(positions, 0.1)` → **245,725** 虚拟点(远超预算)→ 已把 `voxelInfillSize` 调到 **0.2**,降到 76,842 虚拟点、基底合计 ~9.8 万,回到 30k-80k 预算内
+- 因地图变大,`slam.js` 做了一组适配(见 §C.6,纯前端、点云真实坐标不变):网格/坐标轴留在原点放大、相机 far 500→4000、maxDistance 放开、**默认与双击复位=坐标系原点正上方俯视**(按视口比例框住整图)、**基底图点改屏幕恒定像素**(否则百米俯视点会缩成亚像素看着像空的)
 
 ---
 
@@ -164,7 +167,7 @@ const baseMapInfillMat = new THREE.PointsMaterial({
 2. 对每个有点的 voxel,在 26 邻居 voxel 中插入"虚拟点"(若邻居 voxel 原本没点)
 3. 虚拟点用 `baseMapInfillMat`(更小、更透)渲染
 
-**预期输出**: 5587 真实点 → 约 4-5 万虚拟点 → 总 ~5 万点渲染。
+**预期输出**(换图后,voxel=0.2m): 21,404 真实点 → ~76,800 虚拟点 → 总 ~9.8 万点渲染。(旧 demo 5587 点 / voxel 0.1m 时约 5.4 万虚拟点)
 
 **算法骨架**(详细见 §B.2)：
 ```
@@ -276,8 +279,8 @@ ACCUMULATE_MAX_POINTS = 150000  // 15 万
 
 | 层 | 点数 | 备注 |
 |---|---|---|
-| 基底图真实点 | ~5,587 | PCD 解析 |
-| 基底图虚拟点(方案 D) | ~45,000 | voxel=0.1m,26 邻居 |
+| 基底图真实点 | ~21,404 | PCD 解析（旧 demo 5,587） |
+| 基底图虚拟点(方案 D) | ~76,800 | voxel=**0.2m**,26 邻居（0.1m 会到 24.6w，过载） |
 | 累积层 | 上限 150,000 | 体素去重 0.05m |
 | 实时扫描(25 帧窗口) | ~20,000 | 单帧 800 × 25 |
 | 轨迹折线 | <10,000 顶点 | 长时间飞行可能要降采样 |
@@ -572,20 +575,19 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 ### A.7 PCD 文件源信息
 
 ```
-源路径: /home/kian/kian_project/global_map_ds.pcd
-大小:   88 KB
-格式:   binary
+格式:   binary（换图后不变）
 header: FIELDS x y z intensity
         SIZE 4 4 4 4
         TYPE F F F F
         COUNT 1 1 1 1
-        WIDTH 5587
+        WIDTH 21404        # 旧 demo 为 5587
         HEIGHT 1
-        POINTS 5587
+        POINTS 21404
         DATA binary
 ```
 
-每点 16 字节(4 个 float32),共 5587 × 16 ≈ 89,392 字节数据段。
+每点 16 字节(4 个 float32),共 21404 × 16 = 342,464 字节数据段 + 188 字节 header = 342,652 字节文件。
+（2026-06-03 换图：新数据由微信传入后替换，格式与坐标系与旧 demo 完全一致，仅场地规模变大。旧文件已备份为 `web_static/maps/global_map_ds.pcd.bak.5587`。）
 
 ---
 
@@ -1039,6 +1041,49 @@ requestAnimationFrame(tick);
 .slam-btn:hover { background: rgba(126, 184, 255, 0.25); }
 ```
 
+### C.6 网格 / 坐标轴 / 相机随地图自适应（2026-06-03 换图后新增）
+
+**背景**：换图后地图跨度约 112m × 95m，而原 `slam.js` 的 `GridHelper(20,20)` 只有 20m、`AxesHelper(1.0)` 仅 1m、相机 far=500、`maxDistance=200`、双击复位写死 `(0,0,15)`，导致大地图点云跑到网格外、看不全、复位也不对。
+
+**改动**（均在 `slam.js`，纯前端，不动协议/后端，**点云真实坐标不变**）：
+
+- **相机**：`far` 500 → **4000**；`controls.maxDistance` 200 → 3000，并在 `loadBaseMap` 里按 `max(maxAbsX,maxAbsY)*6` 进一步放开。
+- **网格/坐标轴留在真实原点 (0,0,0)**（和坐标轴合体，不跟随地图中心）：`fitSceneToMap(bbox)` 把 `GridHelper` 尺寸取 `ceil(maxAbs*2/10)*10`（原点居中、覆盖最远点，每格约 10m）、放在原点；`AxesHelper` 缩放到 `max(2, maxAbs*0.1)`。
+- **默认视角 & 双击复位 = 坐标系原点 (0,0,0) 正上方俯视**（`applyFittedView()`）：高度按**当前视口纵横比**算出"刚好框住整图 + 10% 余量"的最小值，不会过高；Z-up，复现旧版"正上方"手感。`fittedView` 用 `{center:(0,0,0), xspan:2·maxAbsX, yspan:2·maxAbsY}`，每次双击按当前 aspect 实时重算（含 aspect 非法兜底防 NaN）。原点作固定参考——无论某次建图离原点远近，双击都回到原点正上方。
+- **基底图点尺寸改屏幕恒定像素**（`sizeAttenuation:false`，基底 size=2.5px / 补全 size=1.8px）：原本 0.08m + sizeAttenuation 在百米俯视下会缩成亚像素、整图看着像空的；改恒定像素后任意缩放都稳定可见。累积层/scan 层不动（仍 world-size，近距观察要深度）。
+
+**坐标系原点与负 z 说明**：原点 (0,0,0) 是 SLAM 的 `a/camera_init` frame 原点 = 建图/起飞起点，**不是地面**。地图天然"从起点往外长"，所以中心偏离原点是正常的；点云出现 **z<0** 也正常——那是物理上低于传感器起始高度的部分（地面、下坡等），新图 z∈[-3.54, 6.39] 即起点上下约 ±数米。
+
+**注意**：`slam.html` 里 `slam.js` 引用为 `?v=N` 缓存破除，平板 WebView 需确保加载到新版（当前已到 `?v=21`，每改一次 +1）。
+
+---
+
+## §C.7 导航交互大改 — 飞入式缩放 + 平移模式（2026-06-04）
+
+**背景**：§C.6 的"正上方俯视"默认视角在实机上体验很差：①正俯视时单指旋转 = 整张大图绕屏幕中心原地打转，难控制（数学上不是 bug，是 OrbitControls 在视线‖up 时的退化 + 俯视旋转的视觉特性）；②OrbitControls 的缩放本质是"逼近目标点后停住"，**进不了点云内部**（房间外墙就是墙，放大只能贴到外表面）。本节把交互整套调顺，**纯前端、不动协议/后端/渲染**。
+
+**改动（均在 `slam.js`/`slam.html`/`slam.css`）**：
+
+1. **默认/双击视角 = 斜上方俯瞰**（`applyFittedView`）：相机从地图中心的西南上方 `(+d,-d,+d)`（`d=extent*0.7`）看向中心，Z-up。偏移三分量都非零，**避开正俯视的万向锁**，旋转是绕地图 orbit、好控制。`fittedView` 存 `{center, extent}`。
+
+2. **"默认视角"按钮改为保存真实相机姿态**（`setDefViewEditMode`）：不再强制拍平成正俯视、不再锁旋转。点一次进入"自由摆位"（可任意转/平移/缩放），再点一次把当前 `{pos,target,up}` 原样存入 localStorage。存储 key 升到 **`aiagent.slam.defaultView.v2`**（旧 v1 只存"俯视中心+高度"，自动失效→回退斜视默认）。`loadDefaultView` 校验 pos/target/up 三个长度 3 的有限数组。
+
+3. **飞入式缩放 `flyDolly`**（核心）：`controls.enableZoom=false` 关掉自带缩放，改为沿视线**推进整个支点（相机+目标一起走）**——先把相机-目标距离收缩到 `FLY_R_MIN=0.8m`，收缩到底后多余推进量平移支点 = **穿墙进屋**；反向先拉到 `FLY_R_MAX=600m` 再整体后退。进屋后支点就在身前约 0.8m，**屋内旋转依旧平稳**。步长基数钳制在 `[5,100]m`，避免屋外冲太远 / 屋内龟速爬。
+   - **PC**：`wheel` 监听 → `flyDolly(±0.15)`。
+   - **平板**：`pointerdown/move/up`（pointer 事件、**不 preventDefault**，与 OrbitControls 双指平移并存）跟踪两指，捏合间距变化 → `flyDolly`。
+
+4. **平移模式按钮**（`#btn-panmode` 顶栏 + `.panmode-fab` 左上悬浮，蓝色点亮）：双指"平移 vs 捏合"自动判别在实机上仍有串扰，最终改为**显式模式切换**更可控。`setPanMode(true)`：`touches.ONE=PAN`、`mouseButtons.LEFT=PAN`、`enableRotate=false`、`isPanMode=true`（`flyDolly` 首行 `if(isPanMode)return` 禁飞）→ 单指/左键只平移；再点恢复。fab 定位在**左上 `left:14px`**（embedded 顶栏隐藏，左上空）。
+
+5. 其它：`panSpeed=1.8`、`screenSpacePanning=true`（近距平移更跟手）；`minDistance=0.3` 维持原值（缩放已被飞入式接管）。
+
+**踩过的坑（别再犯）**：
+- `controls.touches.TWO` 只接受 `DOLLY_PAN`/`DOLLY_ROTATE`；设成 `THREE.TOUCH.PAN` 会让**双指整个失效**。双指平移就用默认 `DOLLY_PAN`，其 dolly 部分已被 `enableZoom=false` 关掉、只剩 pan。
+- 平板手势监听**必须用 pointer 事件且不要 `preventDefault`**；用 `touchmove+preventDefault` 会掐断 OrbitControls 的双指平移。
+- 正俯视（视线‖up）是 OrbitControls 万向锁退化点，默认视角**不要**死正俯视，给倾角即可。
+- **基底点尺寸**：现行代码是 `size:0.08, sizeAttenuation:true`（世界尺寸，原 §C.4 值）。§C.6 提到的"改恒定像素 `sizeAttenuation:false` 2.5px"**未保留在当前代码中**（曾试图用动态像素解决"放大不进去"，发现真因是 zoomToCursor 吸附到表面、与点尺寸无关，已回退）。以现行 §C.7 为准。
+
+**临时调试钩子**：`window.__slamDbg()` / `__ctl` / `__cam`（暴露控制器与相机，console 可实时调参/读快照）为定位问题所加，**发布前应删除**。
+
 ---
 
 ## §D. 验收清单
@@ -1047,8 +1092,8 @@ requestAnimationFrame(tick);
 
 | 任务 | 完成判据 |
 |---|---|
-| 复制 PCD | `curl -I http://localhost:<port>/static/maps/global_map_ds.pcd` 返回 200,`Content-Length: 90504`(±100B) |
-| pcd_parser.js | 在 Chrome console: `parsePCD(buf).pointCount === 5587` 且 bbox.min[z] < bbox.max[z] |
+| 复制 PCD | `curl -I http://localhost:<port>/static/maps/global_map_ds.pcd` 返回 200,`Content-Length: 342652`(换图后；旧 demo 为 90504) |
+| pcd_parser.js | 在 Chrome console: `parsePCD(buf).pointCount === 21404`（旧 demo 5587）且 bbox.min[z] < bbox.max[z] |
 | voxel_infill.js | `voxelInfill(parsed.positions, 0.1).length / 3` 在 30000-80000 之间 |
 | voxel_accumulator.js | 单测: 同一点 push 100 次 size()==1;push 16 万随机点后 size()<=15万 |
 | slam.html SLAM_CONFIG | F12 console `window.SLAM_CONFIG.baseMapFile === 'global_map_ds.pcd'` |
@@ -1345,6 +1390,7 @@ P1/P2 实施记录已合并到本文 §I,后续继续维护单一文档。
 - **v4**(本版本): **AI 可执行版** — 增加 §A 现有代码摘录、§B 完整骨架、§C 修改 patch、§D 验收清单、§E DO/DON'T、§F 决策日志、§G 离线测试;修正配色决策(保留累积层 rainbow)
 - **v4.1**(2026-05-18 进度标记): H1-H8 代码改动已落地(PC 端);头部加"当前进度速查";§H 勾选 H1-H8、补充 H9-H10 开发板操作提示;**不改设计本体**,只标进度。后续 P1 另开新文档。
 - **v4.2**(2026-05-20 验收标记): H9-H10 开发板/平板侧测试通过;P0 H1-H10 全部完成;同步 SLAM topic 为 `/a/drone_0_cloud_registered_world`、`/a/drone_0_Odometry_world`、`/a/path_world`。
+- **v4.3**(2026-06-03 换图): `global_map_ds.pcd` 换为新场地数据(21404 点 / 342,652 字节,格式坐标系不变);`voxelInfillSize` 0.1→0.2(虚拟点 24.6w→7.7w 回到预算内,**真实点云不变**);新增 §C.6:网格/坐标轴留原点放大、相机 far/maxDistance 放开、默认与双击=原点正上方俯视(按视口比例框图)、基底图点改屏幕恒定像素(修大地图俯视点缩成亚像素)、补充原点/负 z 说明;旧文档 `background01-04.md` / `FIRST_RESPONSE_LATENCY.md` 归纳为 `VOICE_LATENCY_OPTIMIZATION.md`,`slam_nofly_zone_design.md` 内容已并入本文 §I 故删除。`slam.js?v=5`。
 
 ---
 

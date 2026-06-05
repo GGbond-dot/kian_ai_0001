@@ -26,22 +26,202 @@ renderer.setPixelRatio(window.devicePixelRatio);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x06080c);
 
-const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 500);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 4000);
 camera.position.set(8, -8, 6);
 camera.up.set(0, 0, 1);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.zoomToCursor = true;
-controls.zoomSpeed = 1.2;
+controls.enableZoom = false;   // 自带"逼近目标点"的缩放过不了墙，改用下面的 flyDolly 飞入式缩放
 controls.minDistance = 0.3;
-controls.maxDistance = 200;
+controls.maxDistance = 3000;
+controls.panSpeed = 1.8;       // 右键平移提速（透视下平移量本就随距离缩小，近距太迟钝）
+controls.screenSpacePanning = true;  // 平移按屏幕上下左右走，更跟手
+// 双指保持默认 DOLLY_PAN：enableZoom=false 已关掉其 dolly 部分，只剩平移；
+// 前后飞由下面的捏合监听器负责（TOUCH.PAN 是给单指的，设到 TWO 会让双指失效）
 
-scene.add(new THREE.AxesHelper(1.0));
-const grid = new THREE.GridHelper(20, 20, 0x224466, 0x142238);
-grid.rotation.x = Math.PI / 2; // GridHelper 默认在 XZ 平面，转到 XY
+// ===== 飞入式缩放：放大=沿视线向前推进整个支点(相机+目标一起走)，能穿墙进屋再退出 =====
+const FLY_R_MIN = 0.8;     // 相机-目标最近距离；收缩到此后多余推进量平移支点(穿墙)
+const FLY_R_MAX = 600;     // 最远；拉到此后继续缩小则整体后退
+const _flyFwd = new THREE.Vector3();
+let isPanMode = false;     // 平移模式：只拖动平移，关旋转与飞行(见底部按钮)
+function flyDolly(delta) {  // delta>0 = 往里飞(放大)，<0 = 往外退(缩小)
+  if (isPanMode) return;   // 平移模式下禁飞
+  _flyFwd.subVectors(controls.target, camera.position);
+  const radius = _flyFwd.length();
+  if (radius < 1e-6) return;
+  _flyFwd.multiplyScalar(1 / radius);
+  // 步长基数钳制在 [5,100]m：屋外不会一步冲太远，飞进小屋后也不会变龟速爬
+  const step = delta * Math.min(100, Math.max(5, radius));
+  const newRadius = Math.min(FLY_R_MAX, Math.max(FLY_R_MIN, radius - step));
+  const remain = step - (radius - newRadius);              // 半径吸收不掉的溢出量 → 平移支点
+  camera.position.copy(controls.target).addScaledVector(_flyFwd, -newRadius);
+  if (remain !== 0) {
+    controls.target.addScaledVector(_flyFwd, remain);
+    camera.position.addScaledVector(_flyFwd, remain);
+  }
+  controls.update();
+}
+
+// PC 滚轮
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  flyDolly(e.deltaY < 0 ? 0.15 : -0.15);
+}, { passive: false });
+
+// 平板双指捏合（用 pointer 事件、不 preventDefault，与 OrbitControls 双指平移并存：
+// 捏合距离变化=前后飞，双指拖动=平移由 OrbitControls 处理）
+const _flyPtrs = new Map();
+let _pinchPrev = null;   // {dist, cx, cy}
+const _pinchState = () => {
+  const [a, b] = [..._flyPtrs.values()];
+  return {
+    dist: Math.hypot(a.x - b.x, a.y - b.y),
+    cx: (a.x + b.x) / 2,
+    cy: (a.y + b.y) / 2,
+  };
+};
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'touch') return;
+  _flyPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (_flyPtrs.size === 2) _pinchPrev = _pinchState();
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'touch' || !_flyPtrs.has(e.pointerId)) return;
+  _flyPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (_flyPtrs.size !== 2) return;
+  const s = _pinchState();
+  if (_pinchPrev) {
+    const dSep = s.dist - _pinchPrev.dist;                                  // 两指间距变化=捏合量
+    const dCen = Math.hypot(s.cx - _pinchPrev.cx, s.cy - _pinchPrev.cy);    // 两指中点移动=平移量
+    // 捏合明显占主导才飞；否则当作平移(交给 OrbitControls)，避免拖动平移时串入飞行
+    if (Math.abs(dSep) > dCen) flyDolly(dSep / _pinchPrev.dist);
+  }
+  _pinchPrev = s;
+});
+const _flyPtrEnd = (e) => {
+  _flyPtrs.delete(e.pointerId);
+  if (_flyPtrs.size < 2) _pinchPrev = null;
+};
+canvas.addEventListener('pointerup', _flyPtrEnd);
+canvas.addEventListener('pointercancel', _flyPtrEnd);
+
+// 临时调试钩子：console 里 __ctl=控制器 / __cam=相机，可实时改参数；__slamDbg() 读快照
+window.__ctl = controls;
+window.__cam = camera;
+window.__slamDbg = () => ({
+  rotateSpeed: controls.rotateSpeed,
+  panSpeed: controls.panSpeed,
+  zoomToCursor: controls.zoomToCursor,
+  screenSpacePanning: controls.screenSpacePanning,
+  minDistance: controls.minDistance,
+  maxDistance: +controls.maxDistance.toFixed(1),
+  near: camera.near,
+  far: camera.far,
+  up: camera.up.toArray(),
+  pos: camera.position.toArray().map(n => +n.toFixed(2)),
+  target: controls.target.toArray().map(n => +n.toFixed(2)),
+  dist: +camera.position.distanceTo(controls.target).toFixed(3),
+});
+
+const axes = new THREE.AxesHelper(2.0);
+scene.add(axes);
+
+// 网格初始 20m，加载基底图后按 bbox 重建（见 fitSceneToMap）
+let grid = makeGrid(20, 20, 0, 0, 0);
 scene.add(grid);
+// {center:Vector3, xspan, yspan}；基底图加载后记录，供初始/双击的正上方俯视
+let fittedView = null;
+
+function makeGrid(size, divisions, cx, cy, z) {
+  const g = new THREE.GridHelper(size, divisions, 0x224466, 0x142238);
+  g.rotation.x = Math.PI / 2; // GridHelper 默认在 XZ 平面，转到 XY
+  g.position.set(cx, cy, z);
+  return g;
+}
+
+// 网格与坐标轴一起留在真实原点 (0,0,0)，只是放大到能覆盖整张地图
+function fitSceneToMap(bbox) {
+  const maxAbs = Math.max(
+    Math.abs(bbox.min[0]), Math.abs(bbox.max[0]),
+    Math.abs(bbox.min[1]), Math.abs(bbox.max[1]),
+  );
+  const size = Math.max(20, Math.ceil((maxAbs * 2) / 10) * 10); // 原点居中、覆盖最远点
+  const divisions = Math.max(10, Math.round(size / 10));        // 每格约 10m
+  scene.remove(grid);
+  grid.geometry.dispose();
+  grid.material.dispose();
+  grid = makeGrid(size, divisions, 0, 0, 0);
+  scene.add(grid);
+  axes.scale.setScalar(Math.max(2, maxAbs * 0.1));
+}
+
+// 用户没自定义"默认视角"时的回退俯视高度（米）
+const DBLCLICK_VIEW_HEIGHT = 40;
+// 用户自定义默认视角（保存真实相机姿态：位置 + 目标 + up）持久化
+// v2 起改为存完整姿态，旧 v1（只存俯视中心+高度）自动失效、回退到斜视默认
+const DEFVIEW_STORAGE_KEY = 'aiagent.slam.defaultView.v2';
+
+function loadDefaultView() {
+  try {
+    const raw = localStorage.getItem(DEFVIEW_STORAGE_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    const ok = (a) => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
+    if (ok(v.pos) && ok(v.target) && ok(v.up)) return v;
+  } catch (e) { console.warn('默认视角读取失败:', e); }
+  return null;
+}
+
+// 双击/初始复位：优先用用户存的"默认视角"，否则回退到地图正上方固定高度
+function applyFittedView() {
+  const def = loadDefaultView();
+  if (def) {
+    camera.up.fromArray(def.up);
+    controls.target.fromArray(def.target);
+    camera.position.fromArray(def.pos);
+    controls.update();
+    return;
+  }
+  if (!fittedView) return;
+  const c = fittedView.center;
+  // 斜上方俯瞰（不是正死俯视）：相机从西南上方看向地图中心。
+  // 偏移向量三个分量都非零，既避开了正俯视的万向锁，旋转又是绕地图orbit，
+  // 单指拖动手感跟换图前一致、好控制。
+  const d = (fittedView.extent || DBLCLICK_VIEW_HEIGHT) * 0.7;
+  camera.up.set(0, 0, 1);                 // Z-up，世界坐标自然朝向
+  controls.target.copy(c);
+  camera.position.set(c.x + d, c.y - d, c.z + d);
+  camera.lookAt(c);
+  controls.update();
+}
+
+// "默认视角"编辑模式：点一次进入"自由摆位"，可任意旋转/平移/缩放摆好角度，
+// 再点一次把当前真实相机姿态(位置+目标+up)存为默认。不再强制正俯视、不锁旋转。
+let isDefViewEdit = false;
+
+function updateDefViewButtons(active) {
+  for (const b of [btnDefView, btnDefViewFab]) {
+    if (!b) continue;
+    b.classList.toggle('active', active);
+    b.textContent = active ? '✓ 保存默认视角' : '默认视角';
+  }
+}
+
+function setDefViewEditMode(active) {
+  isDefViewEdit = active;
+  updateDefViewButtons(active);
+  if (active) return;                              // 进入只是切按钮文案 + 抑制双击复位
+  // 退出 = 保存当前真实相机姿态，原样还原（含倾角），从这个角度旋转就是自然 orbit
+  const def = {
+    pos: camera.position.toArray(),
+    target: controls.target.toArray(),
+    up: camera.up.toArray(),
+  };
+  try { localStorage.setItem(DEFVIEW_STORAGE_KEY, JSON.stringify(def)); }
+  catch (e) { console.warn('默认视角保存失败:', e); }
+}
 
 // ===== 基底图 (静态预建地图) =====
 const baseMapGeom = new THREE.BufferGeometry();
@@ -136,6 +316,25 @@ const btnGraspSend = document.getElementById('btn-grasp-send');
 const btnGraspClear = document.getElementById('btn-grasp-clear');
 const graspPanel = document.getElementById('grasp-panel');
 const graspInfo = document.getElementById('grasp-info');
+const btnDefView = document.getElementById('btn-defview');
+const btnDefViewFab = document.getElementById('btn-defview-fab');
+const onDefViewClick = () => setDefViewEditMode(!isDefViewEdit);
+btnDefView?.addEventListener('click', onDefViewClick);
+btnDefViewFab?.addEventListener('click', onDefViewClick);
+
+// 平移模式开关：开 = 单指/左键只平移，关旋转与飞行；关 = 恢复转/飞/平移
+const btnPanMode = document.getElementById('btn-panmode');
+const btnPanModeFab = document.getElementById('btn-panmode-fab');
+function setPanMode(active) {
+  isPanMode = active;
+  controls.enableRotate = !active;
+  controls.touches.ONE = active ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
+  controls.mouseButtons.LEFT = active ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+  for (const b of [btnPanMode, btnPanModeFab]) b?.classList.toggle('active', active);
+}
+const onPanModeClick = () => setPanMode(!isPanMode);
+btnPanMode?.addEventListener('click', onPanModeClick);
+btnPanModeFab?.addEventListener('click', onPanModeClick);
 btnClearAccum?.addEventListener('click', () => {
   mapAccum.clear();
   rebuildMapGeom();
@@ -1011,8 +1210,13 @@ function tick(now) {
 
 // 双击重置视角
 canvas.addEventListener('dblclick', () => {
-  camera.position.set(0, 0, 15);
-  controls.target.set(0, 0, 0);
+  if (isDefViewEdit) return;          // 正在设默认视角时不触发复位
+  if (fittedView || loadDefaultView()) {
+    applyFittedView();                // 回到用户存的默认视角（无则地图正上方）
+  } else {
+    camera.position.set(0, 0, 15);
+    controls.target.set(0, 0, 0);
+  }
 });
 
 async function loadBaseMap() {
@@ -1036,6 +1240,12 @@ async function loadBaseMap() {
 
     statBase.textContent = `基底: ${pointCount.toLocaleString()} (+${infillCount.toLocaleString()}补全)`;
 
+    // 网格/坐标轴留在原点放大；缩放上限按整图放开
+    fitSceneToMap(bbox);
+    const maxAbsX = Math.max(Math.abs(bbox.min[0]), Math.abs(bbox.max[0]));
+    const maxAbsY = Math.max(Math.abs(bbox.min[1]), Math.abs(bbox.max[1]));
+    controls.maxDistance = Math.max(controls.maxDistance, Math.max(maxAbsX, maxAbsY) * 6);
+    // 默认/双击 = 斜上方俯瞰整张地图（不是正死俯视，正俯视单指拖会让整图原地打转、难控制）
     const cx = (bbox.min[0] + bbox.max[0]) / 2;
     const cy = (bbox.min[1] + bbox.max[1]) / 2;
     const cz = (bbox.min[2] + bbox.max[2]) / 2;
@@ -1044,8 +1254,8 @@ async function loadBaseMap() {
       bbox.max[1] - bbox.min[1],
       bbox.max[2] - bbox.min[2],
     );
-    controls.target.set(cx, cy, cz);
-    camera.position.set(cx + extent, cy - extent, cz + extent * 0.7);
+    fittedView = { center: new THREE.Vector3(cx, cy, cz), extent };
+    applyFittedView();
   } catch (e) {
     console.warn('基底图加载失败:', e);
     statBase.textContent = `基底: 加载失败`;

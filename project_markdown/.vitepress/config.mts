@@ -16,19 +16,17 @@ export default defineConfig({
         text: 'Guide',
         items: [
           { text: 'Overview', link: '/' },
-          { text: 'First Response Latency', link: '/FIRST_RESPONSE_LATENCY' },
           { text: 'SLAM Web Viewer', link: '/SLAM_WEB_VIEWER_DESIGN' },
           { text: 'Web UI Architecture Plan', link: '/WEB_UI_ARCHITECTURE_PLAN' },
           { text: 'ROS2 Native Humble Changelog', link: '/ROS2_NATIVE_HUMBLE_CHANGELOG' }
         ]
       },
       {
-        text: 'Background',
+        text: 'Design',
         items: [
-          { text: 'Background 01', link: '/background01' },
-          { text: 'Background 02', link: '/background02' },
-          { text: 'Background 03', link: '/background03' },
-          { text: 'Background 04', link: '/background04' }
+          { text: 'Voice Latency Optimization', link: '/VOICE_LATENCY_OPTIMIZATION' },
+          { text: 'SLAM Base Map & No-Fly Zone', link: '/slam_base_map_and_nfz_design' },
+          { text: 'SLAM Grasp Region', link: '/slam_grasp_region_design' }
         ]
       }
     ],

@@ -15,7 +15,7 @@
       baseMapFile: 'global_map_ds.pcd',
       baseMapTransform: null,
       enableVoxelInfill: true,
-      voxelInfillSize: 0.1,
+      voxelInfillSize: 0.2,    // 大地图：0.1 会产 ~24.6w 虚拟点；0.2 降到 ~7.7w，回到性能预算内
       accumulateVoxelSize: 0.05,
       accumulateMaxPoints: 150000,
       enableNoFlyZoneDraw: true,
@@ -33,6 +33,8 @@
     <div class="title">SLAM Viewer</div>
     <button id="btn-nofly-draw" class="slam-btn topbar-btn" type="button">禁飞区</button>
     <button id="btn-grasp-draw" class="slam-btn topbar-btn" type="button">抓取</button>
+    <button id="btn-defview" class="slam-btn topbar-btn" type="button" title="设定双击复位的默认视角：点击后平移定中心、缩放定高度，再点一次保存">默认视角</button>
+    <button id="btn-panmode" class="slam-btn topbar-btn" type="button" title="平移模式：开启后只能拖动平移，关闭旋转和飞行缩放">平移</button>
     <div class="conn-badge disconnected">OFFLINE</div>
   </div>
 
@@ -40,6 +42,8 @@
 
   <button id="btn-nofly-fab" class="slam-btn nofly-fab" type="button">禁飞区</button>
   <button id="btn-grasp-fab" class="slam-btn grasp-fab" type="button">抓取</button>
+  <button id="btn-defview-fab" class="slam-btn defview-fab" type="button">默认视角</button>
+  <button id="btn-panmode-fab" class="slam-btn panmode-fab" type="button">平移</button>
 
   <div id="nofly-panel" class="nofly-panel hidden">
     <div class="nofly-panel-head">
@@ -84,7 +88,7 @@
   }
 }
 </script>
-<script type="module" src="/static/slam.js"></script>
+<script type="module" src="/static/slam.js?v=21"></script>
 
 </body>
 </html>

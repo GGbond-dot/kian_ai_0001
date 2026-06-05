@@ -111,8 +111,36 @@ html, body {
   color: #d7ffe6;
 }
 
+.defview-fab {
+  position: absolute;
+  top: 14px;
+  right: 186px;
+  z-index: 11;
+  display: none;
+  margin-left: 0;
+}
+
+.panmode-fab {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  transform: translateY(-50%);
+  z-index: 11;
+  display: none;
+  margin-left: 0;
+}
+
+#btn-panmode.active,
+.panmode-fab.active {
+  background: rgba(126, 184, 255, 0.30);
+  border-color: rgba(126, 184, 255, 0.85);
+  color: #e6f0ff;
+}
+
 .embedded .nofly-fab,
-.embedded .grasp-fab {
+.embedded .grasp-fab,
+.embedded .defview-fab,
+.embedded .panmode-fab {
   display: block;
 }
 
