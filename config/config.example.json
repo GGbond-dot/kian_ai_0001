@@ -1,0 +1,99 @@
+{
+  "SYSTEM_OPTIONS": {
+    "CLIENT_ID": null,
+    "DEVICE_ID": null
+  },
+  "LLM": {
+    "base_url": "https://opencode.ai/zen/go/v1",
+    "api_key": "${OPENCODE_GO_API_KEY}",
+    "model": "kimi-k2.6",
+    "max_tokens": 2048,
+    "temperature": 0.7,
+    "max_history_turns": 20,
+    "system_prompt": "你是多无人机协同物流系统的智能终端助手。优先准确理解操作员意图；需要执行动作时调用可用工具；回复要简短、明确。\n\n当无人机到达送物地点后，应调用 vision.get_detection 查询摄像头检测到的 QR 码和货物信息。确认检测结果正确后，操作员确认后，调用 vision.dispatch_place 下发放物地点(goal_type=2)。"
+  },
+  "LLM_FAST": {
+    "base_url": "https://opencode.ai/zen/go/v1",
+    "api_key": "${OPENCODE_GO_API_KEY}",
+    "model": "mimo-v2.5",
+    "max_tokens": 256,
+    "temperature": 0.7,
+    "system_prompt": "你是物流终端机器人的语音助手。回答要简短自然，一两句话即可。如果用户的请求超出你能处理的范围，直接简短回复「我做不了」或「这个我没办法处理」，不要硬编。"
+  },
+  "INTENT_KEYWORDS": {
+    "drone.takeoff": ["起飞", "开始起飞", "系统启动", "执行任务"],
+    "drone.hover": ["悬停", "保持悬停"],
+    "drone.land": ["降落", "返航", "停止任务"],
+    "mapping.view": ["查看建图效果", "看建图", "看地图", "打开rviz"],
+    "drone.status": ["无人机状态", "查看状态", "任务状态"]
+  },
+  "ROUTER": {
+    "tier2_keywords": [],
+    "fallback_phrases": ["我做不了", "做不了", "没办法处理", "无法处理", "不支持", "我不会"],
+    "fallback_scan_chars": 30,
+    "fast_path_enabled": true
+  },
+  "STT": {
+    "provider": "qwen",
+    "language": "zh",
+    "vad_min_silence_duration_ms": 300,
+    "dashscope_api_key": "${DASHSCOPE_API_KEY}",
+    "dashscope_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "qwen_model": "qwen3-asr-flash",
+    "streaming_enabled": false,
+    "qwen_stream_model": "paraformer-realtime-v2",
+    "streaming_finish_timeout_ms": 1500
+  },
+  "TTS": {
+    "provider": "qwen",
+    "dashscope_api_key": "${DASHSCOPE_API_KEY}",
+    "dashscope_base_url": "https://dashscope.aliyuncs.com/api/v1",
+    "qwen_model": "qwen3-tts-flash",
+    "qwen_voice": "Cherry",
+    "qwen_language_type": "Chinese",
+    "qwen_instructions": "",
+    "qwen_optimize_instructions": false,
+    "tablet_direct": true,
+    "tablet_fallback_cooldown_count": 3
+  },
+  "LOCAL_AGENT": {
+    "VAD_AGGRESSIVENESS": 2,
+    "AUTO_STOP_MIN_VOICE_MS": 240,
+    "AUTO_STOP_MAX_LISTEN_SECONDS": 15.0,
+    "ENERGY_THRESHOLD": 180
+  },
+  "GLOBAL_PLANNER": {
+    "enabled": true,
+    "pcd_path": "maps/global_map_ds.pcd",
+    "planning_z": 0.5,
+    "resolution": 0.6,
+    "inflation_radius": 0.35,
+    "enable_ray_clearing": true,
+    "clearing_ttl": 2.0,
+    "ray_step": 0.15,
+    "hit_keep_radius": 0.45,
+    "namespace": "a",
+    "drone_id": "0",
+    "completion_threshold": 0.5
+  },
+  "VISION": {
+    "enabled": false,
+    "camera_topic": "camera/image_raw/compressed",
+    "model_path": "models/yolo_best_openvino/best.xml",
+    "device": "CPU",
+    "input_width": 640,
+    "input_height": 640,
+    "confidence_threshold": 0.3,
+    "enable_qr": true,
+    "goods_db_path": "config/goods_location.yaml"
+  },
+  "MEMORY": {
+    "enabled": true,
+    "max_recent_messages": 24,
+    "max_explicit_memories": 12,
+    "summary_enabled": false,
+    "summary_history_limit": 12,
+    "summary_max_chars": 400,
+    "summary_source_messages": 16
+  }
+}
