@@ -120,6 +120,15 @@ html, body {
   margin-left: 0;
 }
 
+.defview-clear-fab {
+  position: absolute;
+  top: 14px;
+  right: 272px;
+  z-index: 11;
+  display: none;
+  margin-left: 0;
+}
+
 .panmode-fab {
   position: absolute;
   top: 50%;
@@ -140,6 +149,7 @@ html, body {
 .embedded .nofly-fab,
 .embedded .grasp-fab,
 .embedded .defview-fab,
+.embedded .defview-clear-fab,
 .embedded .panmode-fab {
   display: block;
 }

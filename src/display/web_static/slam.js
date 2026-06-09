@@ -322,6 +322,21 @@ const onDefViewClick = () => setDefViewEditMode(!isDefViewEdit);
 btnDefView?.addEventListener('click', onDefViewClick);
 btnDefViewFab?.addEventListener('click', onDefViewClick);
 
+// 清除默认视角：删掉 localStorage 存档 + 强制 Z-up 复位，回到斜视默认。
+// 也是横滑翻滚(camera.up 残留成非 Z 轴)时的复位手段。
+const btnDefViewClear = document.getElementById('btn-defview-clear');
+const btnDefViewClearFab = document.getElementById('btn-defview-clear-fab');
+const onDefViewClear = () => {
+  try { localStorage.removeItem(DEFVIEW_STORAGE_KEY); }
+  catch (e) { console.warn('清除默认视角失败:', e); }
+  isDefViewEdit = false;
+  updateDefViewButtons(false);   // 退出编辑态但不触发保存
+  camera.up.set(0, 0, 1);        // 强制 Z-up，消除残留翻滚
+  applyFittedView();             // 回退到斜视默认（无存档）
+};
+btnDefViewClear?.addEventListener('click', onDefViewClear);
+btnDefViewClearFab?.addEventListener('click', onDefViewClear);
+
 // 平移模式开关：开 = 单指/左键只平移，关旋转与飞行；关 = 恢复转/飞/平移
 const btnPanMode = document.getElementById('btn-panmode');
 const btnPanModeFab = document.getElementById('btn-panmode-fab');
