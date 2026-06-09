@@ -4,7 +4,7 @@
 .video-toggle-btn {
   position: fixed;
   right: 16px;
-  bottom: 78px;
+  bottom: 96px;          /* 桌面：抬到底部输入栏上方，避免压住发送按钮 */
   z-index: 151;
   padding: 9px 16px;
   border-radius: 999px;
@@ -103,20 +103,26 @@
   pointer-events: none;
 }
 
-/* 触控设备 */
+/* 触控设备：主页底部输入栏 fixed 且较高(~180px)，按钮/浮窗整体上移让开 */
 @media (pointer: coarse) {
+  .video-toggle-btn {
+    bottom: 200px;
+  }
   .video-pip {
     right: 10px;
-    bottom: 190px;
+    bottom: 256px;
     width: 380px;
   }
 }
 
 /* 小屏设备 */
 @media (max-width: 600px) {
+  .video-toggle-btn {
+    bottom: 196px;
+  }
   .video-pip {
     right: 6px;
-    bottom: 170px;
+    bottom: 250px;
     width: 300px;
   }
 }
