@@ -198,7 +198,8 @@ html, body {
 }
 
 .embedded .nofly-panel {
-  top: 16px;
+  /* 下移到 FAB 按钮行(top:14px,约40px高)下方,避免与 默认视角/抓取/禁飞区 重叠 */
+  top: 64px;
 }
 
 .nofly-panel.hidden {
@@ -308,7 +309,8 @@ html, body {
 }
 
 .embedded .grasp-panel {
-  top: 16px;
+  /* 下移到 FAB 按钮行(top:14px,约40px高)下方,避免与 默认视角/抓取/禁飞区 重叠 */
+  top: 64px;
 }
 
 .grasp-panel.hidden {
