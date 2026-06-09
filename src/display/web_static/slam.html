@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SLAM Viewer</title>
   <link rel="stylesheet" href="/static/slam.css">
+  <link rel="stylesheet" href="/static/video.css?v=1">
   <script>
     if (new URLSearchParams(location.search).get('embedded') === '1') {
       document.documentElement.classList.add('embedded');
@@ -91,6 +92,20 @@
 }
 </script>
 <script type="module" src="/static/slam.js?v=21"></script>
+
+<!-- 视频浮窗触发按钮 -->
+<button id="btn-video-toggle" class="video-toggle-btn" type="button" title="显示/隐藏摄像头画面">📹 视频</button>
+
+<!-- 视频浮窗：摄像头标注画面 -->
+<div id="video-pip" class="video-pip" aria-hidden="true">
+  <div class="video-pip-header">
+    <span class="video-pip-label">CAM FEED</span>
+    <button id="btn-video-close" class="video-pip-close" title="关闭视频">×</button>
+  </div>
+  <img id="video-feed" class="video-feed" alt="Camera Feed" src="">
+  <div id="video-placeholder" class="video-placeholder">等待视频流…</div>
+</div>
+<script src="/static/video.js?v=1"></script>
 
 </body>
 </html>

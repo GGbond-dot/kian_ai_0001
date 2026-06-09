@@ -1,0 +1,122 @@
+/* 视频浮窗样式（/ 主页 与 /slam 共用，由 index.html 和 slam.html 各自 link） */
+
+/* ---------- Video 触发按钮 ---------- */
+.video-toggle-btn {
+  position: fixed;
+  right: 16px;
+  bottom: 78px;
+  z-index: 151;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid #1c3357;
+  background: rgba(10, 20, 36, 0.92);
+  color: #88b7e1;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  -webkit-tap-highlight-color: transparent;
+}
+.video-toggle-btn:active { background: #162644; }
+.video-toggle-btn.active {
+  background: rgba(40, 110, 200, 0.28);
+  border-color: #68a8ff;
+  color: #d7e8ff;
+}
+
+/* ---------- Video PiP (画中画摄像头标注画面) ---------- */
+.video-pip {
+  position: fixed;
+  right: 16px;
+  bottom: 130px;
+  width: 440px;
+  max-width: calc(100vw - 24px);
+  z-index: 150;
+  border-radius: 14px;
+  background: #040814;
+  border: 1px solid #1c3357;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  display: none;
+  overflow: hidden;
+  transition: opacity 0.25s;
+}
+
+.video-pip.active {
+  display: block;
+}
+
+.video-pip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 34px;
+  padding: 0 10px;
+  background: #0a1424;
+  border-bottom: 1px solid #162644;
+}
+
+.video-pip-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #68a8ff;
+  letter-spacing: 1.5px;
+}
+
+.video-pip-close {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #88b7e1;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.video-pip-close:active { background: #162644; }
+
+.video-feed {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  background: #010306;
+}
+
+/* 无视频流时的占位提示，收到首帧后由 video.js 隐藏 */
+.video-placeholder {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(100% - 34px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #3a4a60;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+/* 触控设备 */
+@media (pointer: coarse) {
+  .video-pip {
+    right: 10px;
+    bottom: 190px;
+    width: 380px;
+  }
+}
+
+/* 小屏设备 */
+@media (max-width: 600px) {
+  .video-pip {
+    right: 6px;
+    bottom: 170px;
+    width: 300px;
+  }
+}

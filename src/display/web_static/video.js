@@ -9,6 +9,7 @@
   const feed = document.getElementById('video-feed');
   const btnClose = document.getElementById('btn-video-close');
   const placeholder = document.getElementById('video-placeholder');
+  const btnToggle = document.getElementById('btn-video-toggle');
   let ws = null;
   let reconnectTimer = null;
   let reconnectDelay = 2000;
@@ -20,6 +21,7 @@
       pip.classList.add('active');
       visible = true;
     }
+    if (btnToggle) btnToggle.classList.add('active');   // 触发按钮状态同步
   }
 
   function hide() {
@@ -28,6 +30,7 @@
       pip.classList.remove('active');
       visible = false;
     }
+    if (btnToggle) btnToggle.classList.remove('active');  // × 关闭后按钮也复位
   }
 
   function connect() {
@@ -102,17 +105,15 @@
     });
   }
 
-  // 手动触发按钮：开/关浮窗（不依赖视频流，无流时显示空浮窗便于预览/测试）
-  const btnToggle = document.getElementById('btn-video-toggle');
+  // 手动触发按钮：随时开/关浮窗（不依赖视频流，无流时显示占位便于预览/测试）
   if (btnToggle) {
     btnToggle.addEventListener('click', function () {
       if (visible) {
         hide();
       } else {
         show();
-        connect();            // 顺手确保在尝试连流
+        connect();            // 重新打开时确保在尝试连流
       }
-      btnToggle.classList.toggle('active', visible);
     });
   }
 
