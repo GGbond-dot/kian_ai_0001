@@ -8,6 +8,7 @@
   const pip = document.getElementById('video-pip');
   const feed = document.getElementById('video-feed');
   const btnClose = document.getElementById('btn-video-close');
+  const placeholder = document.getElementById('video-placeholder');
   let ws = null;
   let reconnectTimer = null;
   let reconnectDelay = 2000;
@@ -53,6 +54,7 @@
         if (prev && prev.startsWith('blob:')) {
           URL.revokeObjectURL(prev);
         }
+        if (placeholder) placeholder.style.display = 'none';  // 有帧了，隐藏占位
         show();
       } catch (e) {
         console.warn('[video] 帧解析失败:', e);
@@ -97,6 +99,20 @@
   if (btnClose) {
     btnClose.addEventListener('click', function () {
       disconnect();
+    });
+  }
+
+  // 手动触发按钮：开/关浮窗（不依赖视频流，无流时显示空浮窗便于预览/测试）
+  const btnToggle = document.getElementById('btn-video-toggle');
+  if (btnToggle) {
+    btnToggle.addEventListener('click', function () {
+      if (visible) {
+        hide();
+      } else {
+        show();
+        connect();            // 顺手确保在尝试连流
+      }
+      btnToggle.classList.toggle('active', visible);
     });
   }
 

@@ -825,6 +825,30 @@ input, button, .btn { touch-action: manipulation; }
   }
 }
 
+/* ---------- Video 触发按钮 ---------- */
+.video-toggle-btn {
+  position: fixed;
+  right: 16px;
+  bottom: 78px;
+  z-index: 151;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid #1c3357;
+  background: rgba(10, 20, 36, 0.92);
+  color: #88b7e1;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  -webkit-tap-highlight-color: transparent;
+}
+.video-toggle-btn:active { background: #162644; }
+.video-toggle-btn.active {
+  background: rgba(40, 110, 200, 0.28);
+  border-color: #68a8ff;
+  color: #d7e8ff;
+}
+
 /* ---------- Video PiP (画中画摄像头标注画面) ---------- */
 .video-pip {
   position: fixed;
@@ -886,6 +910,21 @@ input, button, .btn { touch-action: manipulation; }
   aspect-ratio: 4 / 3;
   object-fit: contain;
   background: #010306;
+}
+
+/* 无视频流时的占位提示，收到首帧后由 video.js 隐藏 */
+.video-placeholder {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(100% - 32px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #3a4a60;
+  font-size: 13px;
+  pointer-events: none;
 }
 
 /* 触控设备上放大 PiP */

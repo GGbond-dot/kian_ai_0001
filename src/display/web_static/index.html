@@ -125,6 +125,9 @@
 
 </div>
 
+<!-- 视频浮窗触发按钮 -->
+<button id="btn-video-toggle" class="video-toggle-btn" type="button" title="显示/隐藏摄像头画面">📹 视频</button>
+
 <!-- 视频浮窗：摄像头标注画面 -->
 <div id="video-pip" class="video-pip" aria-hidden="true">
   <div class="video-pip-header">
@@ -132,6 +135,7 @@
     <button id="btn-video-close" class="video-pip-close" title="关闭视频">×</button>
   </div>
   <img id="video-feed" class="video-feed" alt="Camera Feed" src="">
+  <div id="video-placeholder" class="video-placeholder">等待视频流…</div>
 </div>
 
 <script src="/static/app.js?v=5"></script>
