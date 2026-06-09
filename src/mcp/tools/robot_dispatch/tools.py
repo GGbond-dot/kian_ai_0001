@@ -262,9 +262,16 @@ async def vision_get_detection(args: dict) -> str:
     """
     _ = args
     import json
-    from src.plugins.vision_plugin import get_vision_plugin
-    detection = await get_vision_plugin().get_detection()
-    return json.dumps(detection, ensure_ascii=False)
+    try:
+        from src.plugins.vision_plugin import get_vision_plugin
+        detection = await get_vision_plugin().get_detection()
+        return json.dumps(detection, ensure_ascii=False)
+    except RuntimeError as exc:
+        # 视觉未启用 / 尚无检测结果 等可预期错误，回给用户
+        return f"查询检测结果失败：{exc}"
+    except Exception as exc:  # noqa: BLE001
+        _logger.error("[vision] get_detection 异常: %s", exc, exc_info=True)
+        return f"查询检测结果异常：{exc}"
 
 
 async def vision_dispatch_place(args: dict) -> str:
@@ -275,5 +282,14 @@ async def vision_dispatch_place(args: dict) -> str:
     Call this after the user confirms the detected cargo and drop-off location.
     """
     _ = args
-    from src.plugins.vision_plugin import get_vision_plugin
-    return await get_vision_plugin().dispatch_place()
+    try:
+        from src.plugins.vision_plugin import get_vision_plugin
+        result = await get_vision_plugin().dispatch_place()
+        _logger.info("[vision] dispatch_place -> %s", result)
+        return f"已下发放物点：{result}"
+    except RuntimeError as exc:
+        # 未检测到放物点 / 规划器未就绪 等可预期错误，直接把原因回给用户
+        return f"放物下发失败：{exc}"
+    except Exception as exc:  # noqa: BLE001
+        _logger.error("[vision] dispatch_place 异常: %s", exc, exc_info=True)
+        return f"放物下发异常：{exc}"
