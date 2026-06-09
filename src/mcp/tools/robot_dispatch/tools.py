@@ -244,3 +244,36 @@ async def dispatch_selected_goal(args: dict) -> str:
     except Exception as exc:  # noqa: BLE001
         _logger.error("[ros_terminal] dispatch 异常: %s", exc, exc_info=True)
         return f"下发异常：{exc}"
+
+
+async def planner_status(args: dict) -> str:
+    """Return Kian-side global planner readiness and latest planning result."""
+    _ = args
+    from src.plugins.ros_terminal import get_ros_terminal_plugin
+    return await get_ros_terminal_plugin().planner_status()
+
+
+async def vision_get_detection(args: dict) -> str:
+    """Query latest YOLO + QR detection result from the drone camera stream.
+
+    Returns a JSON object with keys:
+      detected, qr_detected, qr_data, goods_name, place_x, place_y, place_z.
+    Call this to check if a cargo QR code has been detected at the current delivery point.
+    """
+    _ = args
+    import json
+    from src.plugins.vision_plugin import get_vision_plugin
+    detection = await get_vision_plugin().get_detection()
+    return json.dumps(detection, ensure_ascii=False)
+
+
+async def vision_dispatch_place(args: dict) -> str:
+    """Dispatch the drop-off (place) location for the currently detected cargo.
+
+    Reads the latest detection result (must have qr_detected=true with valid place_x/place_y),
+    calls the global planner, and publishes GoalWithType (goal_type=2=place) to the drone.
+    Call this after the user confirms the detected cargo and drop-off location.
+    """
+    _ = args
+    from src.plugins.vision_plugin import get_vision_plugin
+    return await get_vision_plugin().dispatch_place()
