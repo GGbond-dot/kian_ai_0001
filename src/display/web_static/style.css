@@ -824,3 +824,84 @@ input, button, .btn { touch-action: manipulation; }
     max-height: 140px;
   }
 }
+
+/* ---------- Video PiP (画中画摄像头标注画面) ---------- */
+.video-pip {
+  position: fixed;
+  right: 16px;
+  bottom: 120px;
+  width: 320px;
+  z-index: 150;
+  border-radius: 14px;
+  background: #040814;
+  border: 1px solid #1c3357;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  display: none;
+  overflow: hidden;
+  transition: opacity 0.25s;
+}
+
+.video-pip.active {
+  display: block;
+}
+
+.video-pip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 10px;
+  background: #0a1424;
+  border-bottom: 1px solid #162644;
+}
+
+.video-pip-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #68a8ff;
+  letter-spacing: 1.5px;
+}
+
+.video-pip-close {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #88b7e1;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.video-pip-close:active { background: #162644; }
+
+.video-feed {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  background: #010306;
+}
+
+/* 触控设备上放大 PiP */
+@media (pointer: coarse) {
+  .video-pip {
+    right: 10px;
+    bottom: 190px;
+    width: 260px;
+  }
+}
+
+/* 小屏设备进一步缩小 */
+@media (max-width: 600px) {
+  .video-pip {
+    right: 6px;
+    bottom: 170px;
+    width: 200px;
+  }
+}

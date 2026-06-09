@@ -102,6 +102,9 @@ class CliDisplay(BaseDisplay):
         self._dash_emotion = emotion_name
         await self._render_dashboard()
 
+    async def update_video_frame(self, jpeg_bytes: bytes) -> None:
+        pass  # CLI 不支持视频显示
+
     async def start(self):
         """
         启动异步CLI显示.

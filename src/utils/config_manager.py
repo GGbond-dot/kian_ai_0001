@@ -86,6 +86,19 @@ class ConfigManager:
             "summary_max_chars": 400,
             "summary_source_messages": 16,
         },
+        "GLOBAL_PLANNER": {
+            "enabled": True,
+            "pcd_path": "maps/global_map_ds.pcd",
+            "planning_z": 0.5,
+            "resolution": 0.6,
+            "inflation_radius": 0.35,
+            "enable_ray_clearing": True,
+            "clearing_ttl": 2.0,
+            "ray_step": 0.15,
+            "hit_keep_radius": 0.45,
+            "namespace": "a",
+            "drone_id": "0",
+        },
     }
 
     def __new__(cls):

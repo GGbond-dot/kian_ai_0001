@@ -125,10 +125,20 @@
 
 </div>
 
+<!-- 视频浮窗：摄像头标注画面 -->
+<div id="video-pip" class="video-pip" aria-hidden="true">
+  <div class="video-pip-header">
+    <span class="video-pip-label">CAM FEED</span>
+    <button id="btn-video-close" class="video-pip-close" title="关闭视频">×</button>
+  </div>
+  <img id="video-feed" class="video-feed" alt="Camera Feed" src="">
+</div>
+
 <script src="/static/app.js?v=5"></script>
 <script src="/static/tablet_mic.js?v=5"></script>
 <script src="/static/audio_out.js?v=4"></script>
 <script src="/static/tts_direct.js?v=5"></script>
+<script src="/static/video.js?v=1"></script>
 <script>
   // 注册 Service Worker — 让浏览器把页面识别为可安装 PWA
   if ('serviceWorker' in navigator) {

@@ -27,6 +27,7 @@ from src.ros.grasp_task_bridge import (
 )
 from src.utils.logging_config import get_logger
 from src.utils.resource_finder import find_assets_dir
+from src.utils.config_manager import ConfigManager
 
 logger = get_logger(__name__)
 
@@ -43,6 +44,7 @@ class WebServer:
         self.app = FastAPI(title="AI Agent Console")
         self._connections: set[WebSocket] = set()
         self._slam_connections: set[WebSocket] = set()
+        self._video_connections: set[WebSocket] = set()
         self._audio_in_connections: set[WebSocket] = set()
         self._audio_out_connections: set[WebSocket] = set()
         self._server = None
@@ -114,6 +116,16 @@ class WebServer:
         """更新状态快照中的某个字段."""
         self._state[key] = value
 
+    @staticmethod
+    def _global_map_path() -> Path:
+        configured = ConfigManager.get_instance().get_config(
+            "GLOBAL_PLANNER.pcd_path", "maps/global_map_ds.pcd"
+        )
+        path = Path(str(configured))
+        if path.is_absolute():
+            return path
+        return Path(__file__).resolve().parents[2] / path
+
     
     def _validate_nofly_zones(self, zones: Any) -> list[dict[str, Any]]:
         if not isinstance(zones, list):
@@ -180,20 +192,14 @@ class WebServer:
         cx = (min_x + max_x) / 2
         cy = (min_y + max_y) / 2
 
-        interrupt_mode_raw = payload.get("interrupt_mode", GRASP_DEFAULT_INTERRUPT_MODE)
-        try:
-            interrupt_mode = int(interrupt_mode_raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("invalid_interrupt_mode") from exc
-        if interrupt_mode not in (0, 1):
-            raise ValueError("interrupt_mode_out_of_range")
-
         return {
             "cx": cx,
             "cy": cy,
             "z": GRASP_GOAL_Z,
             "goal_type": GRASP_GOAL_TYPE_PICKUP,
-            "interrupt_mode": interrupt_mode,
+            "interrupt_mode": 0,
+            "dwell_time": 0.0,
+            "yaw_deg": -1.0,
             "frame_id": str(payload.get("frame_id") or "world"),
             "source": str(payload.get("source") or "slam_web"),
             "rect": {
@@ -224,7 +230,10 @@ class WebServer:
         @app.get("/slam")
         async def slam_page():
             slam_file = STATIC_DIR / "slam.html"
-            return HTMLResponse(slam_file.read_text(encoding="utf-8"))
+            return HTMLResponse(
+                slam_file.read_text(encoding="utf-8"),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
         # 平板直连 TTS PoC（临时验证页，方案敲定后删）
         @app.get("/tts_poc")
@@ -240,6 +249,15 @@ class WebServer:
                 "model": "qwen3-tts-flash",
                 "voice": "Cherry",
             }
+
+        @app.get("/api/global_map.pcd")
+        async def global_map():
+            """Return the same local offline map used by the Kian planner."""
+            return FileResponse(
+                str(self._global_map_path()),
+                media_type="application/octet-stream",
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
         @app.get("/api/noflyzone")
         async def get_noflyzone():
@@ -394,6 +412,11 @@ class WebServer:
         async def ws_audio_out_endpoint(websocket: WebSocket):
             await self._handle_audio_out_ws(websocket)
 
+        # WebSocket — 视频标注帧推送 (JPEG 二进制)
+        @app.websocket("/ws/video")
+        async def ws_video_endpoint(websocket: WebSocket):
+            await self._handle_video_ws(websocket)
+
     # ===================== WebSocket 处理 =====================
 
     async def _handle_ws(self, websocket: WebSocket) -> None:
@@ -442,6 +465,21 @@ class WebServer:
         finally:
             self._slam_connections.discard(websocket)
             logger.info("SLAM WS 已断开, 当前连接数: %d", len(self._slam_connections))
+
+    async def _handle_video_ws(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._video_connections.add(websocket)
+        logger.info("Video WS 已连接, 当前连接数: %d", len(self._video_connections))
+        try:
+            while True:
+                await websocket.receive_bytes()
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug("Video WS 连接异常: %s", e)
+        finally:
+            self._video_connections.discard(websocket)
+            logger.info("Video WS 已断开, 当前连接数: %d", len(self._video_connections))
 
     async def _handle_audio_in_ws(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -605,6 +643,19 @@ class WebServer:
         for ws in dead:
             self._slam_connections.discard(ws)
 
+    async def broadcast_video_frame(self, jpeg_bytes: bytes) -> None:
+        """广播 JPEG 视频帧到所有 /ws/video 连接."""
+        if not self._video_connections:
+            return
+        dead: list[WebSocket] = []
+        for ws in self._video_connections:
+            try:
+                await ws.send_bytes(jpeg_bytes)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._video_connections.discard(ws)
+
     async def broadcast(self, data: dict) -> None:
         """广播消息给所有活跃的 WebSocket 连接."""
         if not self._connections:
@@ -650,6 +701,7 @@ class WebServer:
         for ws in (
             list(self._connections)
             + list(self._slam_connections)
+            + list(self._video_connections)
             + list(self._audio_in_connections)
             + list(self._audio_out_connections)
         ):
@@ -659,5 +711,6 @@ class WebServer:
                 pass
         self._connections.clear()
         self._slam_connections.clear()
+        self._video_connections.clear()
         self._audio_in_connections.clear()
         self._audio_out_connections.clear()

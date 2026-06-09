@@ -57,6 +57,10 @@ class BaseDisplay(ABC):
         """
 
     @abstractmethod
+    async def update_video_frame(self, jpeg_bytes: bytes) -> None:
+        """推送视频标注帧（JPEG 二进制）到前端."""
+
+    @abstractmethod
     async def close(self):
         """
         关闭显示.

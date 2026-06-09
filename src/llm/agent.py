@@ -494,6 +494,10 @@ class LLMAgent:
         )
         self._append_history({"role": "assistant", "content": assistant_reply})
 
+    def inject_system_event(self, text: str) -> None:
+        """向对话历史注入系统事件，LLM 在下一轮可感知。"""
+        self._append_history({"role": "user", "content": f"[系统通知] {text}"})
+
     def _conversation_snapshot_for_summary(self) -> List[Dict[str, str]]:
         snapshot: List[Dict[str, str]] = []
         for message in self.conversation_history:

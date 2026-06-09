@@ -132,6 +132,9 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             return
 
         self._last_emotion_name = emotion_name
+
+    async def update_video_frame(self, jpeg_bytes: bytes) -> None:
+        pass  # GUI 模式暂不支持视频帧推送（使用 Web 模式）
         asset_path = self._get_emotion_asset_path(emotion_name)
 
         # 将本地文件路径转换为 QML 可用的 URL（file:///...），

@@ -6,6 +6,9 @@ from .tools import (
     query_status,
     mapping_view,
     dispatch_selected_goal,
+    planner_status,
+    vision_get_detection,
+    vision_dispatch_place,
 )
 
 
@@ -63,7 +66,7 @@ class RobotDispatchManager:
         ))
 
         add_tool((
-            "robot.dispatch_goal",
+            "drone.dispatch_selected_goal",
             (
                 "下发已框选目标工具。当操作员在地图上框选好目标后说「去抓取」「去这里」"
                 "「执行框选任务」「下发目标」「去拿」等指令时调用。"
@@ -71,9 +74,42 @@ class RobotDispatchManager:
                 "goal_type：0=普通导航 1=抓取 2=放置 3=降落，默认 1（抓取）。"
             ),
             PropertyList([
-                Property("goal_type", PropertyType.INTEGER, default_value=1),
+                Property(
+                    "goal_type", PropertyType.INTEGER,
+                    default_value=1, min_value=0, max_value=3,
+                ),
             ]),
             dispatch_selected_goal,
+        ))
+
+        add_tool((
+            "drone.planner_status",
+            "查询 Kian 全局规划器、地图、里程计和最近一次路径状态。",
+            PropertyList([]),
+            planner_status,
+        ))
+
+        add_tool((
+            "vision.get_detection",
+            (
+                "查询无人机摄像头的最新 YOLO + QR 码检测结果。"
+                "返回是否检测到货物、QR 码数据、货物名称、放物坐标(place_x,place_y,place_z)。"
+                "用于在到达送物地点后确认货物和放物点。"
+            ),
+            PropertyList([]),
+            vision_get_detection,
+        ))
+
+        add_tool((
+            "vision.dispatch_place",
+            (
+                "根据检测到的货物 QR 码下发放物地点。"
+                "读取最新检测结果中的放物坐标，调用全局规划器生成路径，"
+                "发布 GoalWithType(goal_type=2=place) 给无人机。"
+                "必须先调用 vision.get_detection 确认检测结果后再使用。"
+            ),
+            PropertyList([]),
+            vision_dispatch_place,
         ))
 
 

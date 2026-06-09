@@ -9,10 +9,13 @@ from typing import Callable, Optional
 
 from src.display.base_display import BaseDisplay
 from src.display.slam_bridge import SlamBridge
+from src.display.slam_bridge import encode_points
+from src.display import slam_constants as C
 from src.display.web_server import WebServer
 from src.ros.drone_command_bridge import get_drone_command_bridge
 from src.ros.grasp_task_bridge import get_grasp_task_bridge
 from src.ros.nofly_zone_bridge import get_nofly_zone_bridge
+import numpy as np
 
 
 class WebDisplay(BaseDisplay):
@@ -60,6 +63,10 @@ class WebDisplay(BaseDisplay):
     async def broadcast_audio_out_text(self, msg: dict) -> int:
         return await self.server.broadcast_audio_out_text(msg)
 
+    async def broadcast_planned_path(self, points, planning_z: float) -> None:
+        xyz = np.asarray([(x, y, planning_z) for x, y in points], dtype=np.float32)
+        await self.server.broadcast_slam_bytes(encode_points(C.CHAN_PATH, xyz))
+
     def set_audio_out_text_callback(self, callback: Callable) -> None:
         self.server.set_audio_out_text_callback(callback)
 
@@ -101,6 +108,9 @@ class WebDisplay(BaseDisplay):
     async def update_button_status(self, text: str):
         self.server.update_state("button_text", text)
         await self.server.broadcast({"type": "button", "text": text})
+
+    async def update_video_frame(self, jpeg_bytes: bytes) -> None:
+        await self.server.broadcast_video_frame(jpeg_bytes)
 
     async def start(self):
         """启动 Web 服务器 (会阻塞直到服务器关闭)."""

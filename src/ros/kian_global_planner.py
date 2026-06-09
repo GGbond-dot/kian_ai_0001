@@ -8,7 +8,7 @@ import struct
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -58,6 +58,13 @@ class KianGlobalPlanner:
         self._last_ray_cleared_cells = 0
         self._last_plan: Optional[dict[str, Any]] = None
         self._path_callback = None
+        self._takeoff_position: Optional[tuple[float, float]] = None
+        self._monitoring_goal: Optional[tuple[float, float]] = None
+        self._monitoring_goal_type: int = 0
+        self.completion_threshold = float(config.get("completion_threshold", 0.5))
+        self._completion_callback: Optional[Callable] = None
+        self._landing_triggered = False
+        self._pending_landing: Optional[tuple[float, float]] = None
         self._static_points = self._load_pcd_xyz(self.pcd_path)
         self._initialize_grid(self._static_points)
 
@@ -152,6 +159,10 @@ class KianGlobalPlanner:
             "goal": {"x": goal[0], "y": goal[1]}, "topic": self.path_topic, "updated_at": time.time(),
         }
         logger.info("KianGlobalPlanner: published %d waypoints type=%d", len(points), goal_msg.goal_type)
+        if int(goal_msg.goal_type) == 2 and len(points) > 1:
+            self._monitoring_goal = points[-1]
+            self._monitoring_goal_type = 2
+            logger.info("KianGlobalPlanner: monitoring PLACE goal (%.2f, %.2f)", points[-1][0], points[-1][1])
         return dict(self._last_plan)
 
     def set_path_callback(self, callback: Any) -> None:
@@ -176,8 +187,62 @@ class KianGlobalPlanner:
 
     def _on_odom(self, msg: Any) -> None:
         p = msg.pose.pose.position
+        x, y = float(p.x), float(p.y)
         with self._lock:
-            self._latest_odom = (float(p.x), float(p.y))
+            self._latest_odom = (x, y)
+            if self._takeoff_position is None:
+                self._takeoff_position = (x, y)
+                logger.info("KianGlobalPlanner: takeoff position saved (%.2f, %.2f)", x, y)
+            if self._monitoring_goal is not None:
+                dist = math.hypot(x - self._monitoring_goal[0], y - self._monitoring_goal[1])
+                if dist < self.completion_threshold:
+                    self._pending_landing = self._monitoring_goal
+                    self._monitoring_goal = None
+                    logger.info("KianGlobalPlanner: goal reached, dist=%.2f, pending landing", dist)
+
+    def _trigger_landing(self, completed_goal: tuple[float, float]) -> None:
+        if self._takeoff_position is None or self._landing_triggered:
+            return
+        if not self.available:
+            logger.error("KianGlobalPlanner: cannot auto-land, planner unavailable")
+            return
+        self._landing_triggered = True
+        msg = self._goal_msg_cls()
+        stamp = self._node.get_clock().now().to_msg()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self.world_frame
+        msg.goal.header = msg.header
+        msg.goal.pose.position.x = float(self._takeoff_position[0])
+        msg.goal.pose.position.y = float(self._takeoff_position[1])
+        msg.goal.pose.position.z = self.planning_z
+        msg.goal.pose.orientation.w = 1.0
+        msg.goal_type = 3
+        msg.dwell_time = 0.0
+        msg.yaw_deg = -1.0
+        msg.interrupt_mode = 0
+        self._goal_pub.publish(msg)
+        result = self.plan_and_publish(msg)
+        logger.info("KianGlobalPlanner: auto LAND dispatched, takeoff=(%.2f, %.2f)",
+                    self._takeoff_position[0], self._takeoff_position[1])
+        if self._completion_callback is not None:
+            try:
+                self._completion_callback(result)
+            except Exception as exc:
+                logger.error("KianGlobalPlanner: completion callback failed: %s", exc)
+
+    def set_completion_callback(self, callback: Callable) -> None:
+        self._completion_callback = callback
+
+    def poll_pending_landing(self) -> Optional[tuple[float, float]]:
+        """取出待处理的 landing 目标（线程安全）。由 asyncio 侧轮询调用。"""
+        with self._lock:
+            goal = self._pending_landing
+            self._pending_landing = None
+            return goal
+
+    def trigger_landing(self, completed_goal: tuple[float, float]) -> None:
+        """从 asyncio 线程调用，执行 landing 规划与发布。"""
+        self._trigger_landing(completed_goal)
 
     def _on_cloud(self, msg: Any) -> None:
         try:

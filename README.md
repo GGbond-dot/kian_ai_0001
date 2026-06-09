@@ -13,6 +13,9 @@
 - Web 控制台：FastAPI 提供 `/` 控制页面、`/slam` 地图页面，以及控制、音频输入、音频输出和 SLAM 的 WebSocket 通道。
 - 平板配套端：`android_webview/` 是一个横屏沉浸式 WebView 客户端，加载后端 Web 控制台，并通过 JS bridge 支持音频交互。
 - SLAM 可视化：`src/display/slam_bridge.py` 与前端 `slam.html/slam.js` 用于实时展示建图、scan、轨迹和位姿。
+- 全局路径规划：`src/ros/kian_global_planner.py` 在终端侧用离线点云地图 + 无人机实时点云跑 A\* 避障，发布稀疏航点路径给无人机；支持 Web 框选禁飞区（终端侧绕开 + 拒发禁区目标）。
+- 视觉识别（可选）：`src/vision/` + `src/plugins/vision_plugin.py` 订阅无人机摄像头，跑 YOLO + QR 检测，按 QR 码查货物库得到放货坐标，标注帧经 `/ws/video` 推到前端画中画浮窗；默认 `VISION.enabled=false`。
+- 视觉送货闭环：LLM 经 `vision.get_detection` / `vision.dispatch_place` 下发放货点，无人机飞抵后自动返航降落并语音播报完成。
 - MCP 工具：默认暴露系统音量和无人机调度工具；日历、计时器、音乐、Web 等工具源码保留，可通过配置按需启用。
 - 面试材料：仓库包含 ROS2 bridge 相关的八股文档和实战复盘，方便讲项目和准备追问。
 
