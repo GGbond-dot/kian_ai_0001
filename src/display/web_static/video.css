@@ -106,11 +106,11 @@
 /* 触控设备：主页底部输入栏 fixed 且较高(~180px)，按钮/浮窗整体上移让开 */
 @media (pointer: coarse) {
   .video-toggle-btn {
-    bottom: 200px;
+    bottom: 160px;
   }
   .video-pip {
     right: 10px;
-    bottom: 256px;
+    bottom: 216px;
     width: 380px;
   }
 }
@@ -118,11 +118,11 @@
 /* 小屏设备 */
 @media (max-width: 600px) {
   .video-toggle-btn {
-    bottom: 196px;
+    bottom: 156px;
   }
   .video-pip {
     right: 6px;
-    bottom: 250px;
+    bottom: 210px;
     width: 300px;
   }
 }
