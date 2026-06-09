@@ -17,8 +17,10 @@ from src.plugins.calendar import CalendarPlugin
 from src.plugins.iot import IoTPlugin
 from src.plugins.manager import PluginManager
 from src.plugins.mcp import McpPlugin
+from src.plugins.ros_terminal import get_ros_terminal_plugin
 from src.plugins.shortcuts import ShortcutsPlugin
 from src.plugins.ui import UIPlugin
+from src.plugins.vision_plugin import get_vision_plugin
 from src.plugins.wake_word import WakeWordPlugin
 from src.protocols.mqtt_protocol import MqttProtocol
 from src.protocols.websocket_protocol import WebsocketProtocol
@@ -102,21 +104,18 @@ class Application:
 
             # 注册音频、UI、MCP、IoT、唤醒词、快捷键与日程插件（UI模式从run参数传入）
             # 插件会自动按 priority 排序：
-            # AudioPlugin(10) -> McpPlugin(20) -> WakeWordPlugin(30) -> CalendarPlugin(40)
+            # AudioPlugin(10) -> RosTerminalPlugin(15) -> VisionPlugin(18) -> McpPlugin(20) -> WakeWordPlugin(30) -> CalendarPlugin(40)
             # -> IoTPlugin(50) -> UIPlugin(60) -> ShortcutsPlugin(70)
-            # RosTerminalPlugin(15)：地面站全局规划 + 框选目标下发（依赖 ros2_ws 已编译）
-            # 用单例，确保 MCP 调度工具拿到的是同一个挂了 ROS 节点的实例
-            from src.plugins.ros_terminal import get_ros_terminal_plugin
-
             self.plugins.register(
                 McpPlugin(),
+                get_ros_terminal_plugin(),
+                get_vision_plugin(),
                 IoTPlugin(),
                 AudioPlugin(),
                 WakeWordPlugin(),
                 CalendarPlugin(),
                 UIPlugin(mode=mode),
                 ShortcutsPlugin(),
-                get_ros_terminal_plugin(),
             )
             await self.plugins.setup_all(self)
             # 启动后广播初始状态，确保 UI 就绪时能看到“待命”
@@ -484,12 +483,34 @@ class Application:
         # 通过插件事件总线异步派发
         self.spawn(self.plugins.notify_incoming_json(payload), "ui:text_update")
 
+    def inject_system_event(self, text: str) -> None:
+        """将系统事件注入 LLM 对话历史，LLM 自行决定如何回应。"""
+        from src.protocols.local_agent_protocol import LocalAgentProtocol
+        if isinstance(self.protocol, LocalAgentProtocol):
+            self.protocol.inject_system_event(text)
+
+    def trigger_proactive_response(self, text: str) -> None:
+        """主动触发 LLM 对系统事件的响应（推理 + TTS 播报 + UI 显示）。"""
+        from src.protocols.local_agent_protocol import LocalAgentProtocol
+        if isinstance(self.protocol, LocalAgentProtocol):
+            self.protocol.trigger_proactive_response(text)
+
     def set_emotion(self, emotion: str) -> None:
         """
         设置情绪表情：通过 UIPlugin 的 on_incoming_json 路由。
         """
         payload = {"type": "llm", "emotion": emotion}
         self.spawn(self.plugins.notify_incoming_json(payload), "ui:emotion_update")
+
+    # -------------------------
+    # 视频帧推送
+    # -------------------------
+    def broadcast_video_frame(self, jpeg_bytes: bytes) -> None:
+        """将标注后的视频帧推送到前端 WebSocket."""
+        ui = self.plugins.get_plugin("ui")
+        if ui is None or ui.display is None:
+            return
+        self.spawn(ui.display.update_video_frame(jpeg_bytes), "video:frame")
 
     # -------------------------
     # 关停
