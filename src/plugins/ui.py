@@ -38,9 +38,14 @@ class UIPlugin(Plugin):
         # 创建对应的 display 实例
         self.display = self._create_display()
         terminal = app.plugins.get_plugin("ros_terminal")
-        planner = getattr(terminal, "planner", None) if terminal else None
-        if planner is not None and hasattr(self.display, "broadcast_planned_path"):
-            planner.set_path_callback(self.display.broadcast_planned_path)
+        if terminal is not None and hasattr(self.display, "broadcast_planned_path"):
+            # 多机:给所有 planner 设 path 回调(各自带 drone_key);回退到默认机
+            if hasattr(terminal, "set_path_callback"):
+                terminal.set_path_callback(self.display.broadcast_planned_path)
+            else:
+                planner = getattr(terminal, "planner", None)
+                if planner is not None:
+                    planner.set_path_callback(self.display.broadcast_planned_path)
 
         # 禁用应用内控制台输入
         if hasattr(app, "use_console_input"):

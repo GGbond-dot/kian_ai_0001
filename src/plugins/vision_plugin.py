@@ -228,10 +228,21 @@ class VisionPlugin(Plugin):
             "cx": goods.place_x,
             "cy": goods.place_y,
             "z": goods.place_z,
+            "source": "vision_qr",
         })
 
-    async def get_detection(self) -> dict[str, Any]:
-        return self.store.latest() or {
+    async def set_camera_stream(self, enable: bool) -> bool:
+        """开/关无人机相机推流（调用 /a/camera/enable）。
+
+        平时关闭省 CPU（检测循环拿不到帧只空转），到货物附近再按键/语音打开。
+        阻塞的 service 调用丢到线程池，避免卡住事件循环。
+        """
+        if not self._enabled or self._bridge is None:
+            raise RuntimeError("视觉模块未启用，无法控制摄像头推流")
+        return await asyncio.to_thread(self._bridge.set_camera_enable, bool(enable))
+
+    async def get_detection(self, drone_key: Optional[str] = None) -> dict[str, Any]:
+        return self.store.latest(drone_key) or {
             "detected": False,
             "qr_detected": False,
             "qr_data": "",
@@ -244,24 +255,29 @@ class VisionPlugin(Plugin):
             "place_z": 0.5,
         }
 
-    async def dispatch_place(self) -> str:
+    async def dispatch_place(self, drone_key: Optional[str] = None) -> str:
         import json
 
         from src.ros.goal_selection_store import get_goal_selection_store
 
         goal_store = get_goal_selection_store()
-        selected = goal_store.latest()
+        selected = goal_store.latest(drone_key)
         if selected is None:
             raise RuntimeError("未检测到放物点，请先确认货物 QR 码已验证")
+        if selected.get("source") != "vision_qr":
+            raise RuntimeError(
+                "当前目标点是地图框选点，不是扫码得到的放物点；请先扫描货物二维码"
+            )
 
         from src.plugins.ros_terminal import get_ros_terminal_plugin
 
         ros_plugin = get_ros_terminal_plugin()
-        if ros_plugin.planner is None:
+        planner = ros_plugin.planner_for(drone_key)
+        if planner is None:
             raise RuntimeError("全局规划器未初始化")
 
-        result = ros_plugin.planner.dispatch_selected(selected, goal_type=2)
-        self.store.clear()
+        result = planner.dispatch_selected(selected, goal_type=2)
+        self.store.clear(drone_key)
         return json.dumps(result, ensure_ascii=False)
 
     @property

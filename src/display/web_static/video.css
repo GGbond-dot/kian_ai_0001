@@ -6,13 +6,18 @@
   right: 16px;
   bottom: 96px;          /* 桌面：抬到底部输入栏上方，避免压住发送按钮 */
   z-index: 151;
-  padding: 9px 16px;
-  border-radius: 999px;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
   border: 1px solid #1c3357;
   background: rgba(10, 20, 36, 0.92);
   color: #88b7e1;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 17px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
   -webkit-tap-highlight-color: transparent;

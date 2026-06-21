@@ -157,3 +157,8 @@ GRASP_DEFAULT_INTERRUPT_MODE = 1   # 1=抢断立即执行 / 0=排队
 - **P1**：前端框选抓取 + 后端 `/api/grasp_task` + `grasp_task_bridge.py` 占位（不 publish）。整条链路前后端打通，bridge `available=False`。
 - **P2**：队友 workspace 部署、`import traj_utils.msg` 验证通过后，bridge `start()` 接 rclpy 实发 `/goal_with_type`，联调抓取闭环。
 - **P3**（可选）：LLM 关键词触发下发（按 [[project_tier_architecture]] 扩 Tier 0 `INTENT_KEYWORDS`）；PCD 换图与参数标定。
+
+> **2026-06-12 更新**：P3 语音触发已实现并扩展——"去抓取"走 Tier 0 直达（args 透传 goal_type=1），
+> 模糊话术由 Tier 2 兜底执行。规划已从"发点给队友 planner"演进为终端本地 A*（`kian_global_planner.py`）。
+> goal_selection_store 加了 `source` 来源校验（slam_web / vision_qr）防止框选点与扫码放物点互相覆盖误发。
+> 路由全貌见 [`three_tier_router_design.md`](three_tier_router_design.md)。

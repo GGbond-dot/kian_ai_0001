@@ -380,3 +380,43 @@ html, body {
     right: 84px;
   }
 }
+
+/* ===================== 多机状态图例 ===================== */
+.drone-legend {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  background: rgba(10, 22, 40, 0.78);
+  border: 1px solid rgba(80, 140, 200, 0.4);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #cfe3ff;
+  max-width: 240px;
+  pointer-events: none;
+}
+.drone-legend .drone-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.drone-legend .drone-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.drone-legend .drone-phase {
+  color: #8fd0ff;
+}
+.drone-legend .drone-odom {
+  margin-left: auto;
+  color: #7f93a8;
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .drone-legend { font-size: 12px; max-width: 180px; padding: 6px 8px; }
+}

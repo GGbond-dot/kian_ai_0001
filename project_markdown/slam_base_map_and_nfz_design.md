@@ -1340,6 +1340,13 @@ P1/P2 实施记录已合并到本文 §I,后续继续维护单一文档。
 }
 ```
 
+> **2026-06-14 更新 — `zMin/zMax` 仅前端展示，后端规划不再用 z 过滤**：
+> 规划演进为终端本地 A*（`kian_global_planner.py`）后，飞机只在固定 `planning_z` 单一高度飞，
+> 2D A* 对 z 没有实际约束意义。原先 `_active_no_fly_zones` 会「只保留 z 区间覆盖 planning_z 的禁区」，
+> 导致用户画的禁区可能因高度对不上而**悄悄失效**（隐患）。现已去掉该过滤——
+> **所有框选禁区一律按 xy 平面生效**；`zMin/zMax` 保留给前端画 3D 盒子展示，后端不据此筛选。
+> 详见 [`camera_stream_toggle_design.md`](camera_stream_toggle_design.md) 同批改动记录。
+
 ### I.3 P2 — 禁飞区下发（框架已落地）
 
 - 前端面板增加 `下发` 按钮。

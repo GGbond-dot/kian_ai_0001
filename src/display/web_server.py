@@ -51,6 +51,8 @@ class WebServer:
         self._command_callback: Optional[Callable] = None
         self._audio_in_callback: Optional[Callable] = None
         self._nofly_zone_callback: Optional[Callable] = None
+        # 摄像头推流开关回调，签名 async (enable: bool) -> bool
+        self._camera_enable_callback: Optional[Callable] = None
         # 平板回报 tts_failed 等上行 JSON 的回调
         # 签名: async (msg: dict) -> None
         self._audio_out_text_callback: Optional[Callable] = None
@@ -103,6 +105,13 @@ class WebServer:
         callback 签名: async (payload: dict) -> dict | None
         """
         self._nofly_zone_callback = callback
+
+    def set_camera_enable_callback(self, callback: Callable) -> None:
+        """设置摄像头推流开关回调.
+
+        callback 签名: async (enable: bool) -> bool（True=成功开/关）
+        """
+        self._camera_enable_callback = callback
 
     def set_grasp_task_callback(self, callback: Callable) -> None:
         """设置抓取任务下发回调.
@@ -235,6 +244,15 @@ class WebServer:
                 headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
             )
 
+        # 开发板随机屏幕 — 表情/状态触摸面板
+        @app.get("/screen")
+        async def screen_page():
+            screen_file = STATIC_DIR / "screen.html"
+            return HTMLResponse(
+                screen_file.read_text(encoding="utf-8"),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
+
         # 平板直连 TTS PoC（临时验证页，方案敲定后删）
         @app.get("/tts_poc")
         async def tts_poc_page():
@@ -309,6 +327,28 @@ class WebServer:
                 "publish": publish_result,
             }
 
+        @app.post("/api/camera_enable")
+        async def post_camera_enable(request: Request):
+            try:
+                payload = await request.json()
+                enable = bool(payload.get("enable", True))
+            except Exception as exc:
+                logger.warning("camera_enable payload 解析失败: %s", exc)
+                return {"ok": False, "error": "invalid_json"}
+
+            if self._camera_enable_callback is None:
+                return {"ok": False, "error": "vision_not_enabled"}
+            try:
+                result = self._camera_enable_callback(enable)
+                if asyncio.iscoroutine(result):
+                    result = await result
+            except Exception as exc:
+                logger.error("camera_enable 回调失败: %s", exc, exc_info=True)
+                return {"ok": False, "error": "callback_failed", "detail": str(exc)}
+
+            logger.info("摄像头推流开关: enable=%s -> ok=%s", enable, result)
+            return {"ok": True, "enable": enable, "success": bool(result)}
+
         @app.get("/api/grasp_task")
         async def get_grasp_task():
             return {
@@ -317,6 +357,40 @@ class WebServer:
                 "updated_at": self._grasp_updated_at,
                 "ros_publish_configured": self._grasp_task_callback is not None,
             }
+
+        @app.get("/api/drones")
+        async def get_drones():
+            """无人机花名册(key/label/namespace)。前端图例/切换用。"""
+            try:
+                from src.ros.drone_config import load_drone_configs
+                from src.utils.config_manager import ConfigManager
+                configs = load_drone_configs(ConfigManager.get_instance())
+                drones = [
+                    {"key": c.key, "label": c.label, "namespace": c.namespace,
+                     "drone_id": c.drone_id, "enabled": c.enabled}
+                    for c in configs
+                ]
+                return {"ok": True, "drones": drones}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("get_drones 失败: %s", exc)
+                return {"ok": False, "error": str(exc), "drones": []}
+
+        @app.get("/api/drones/status")
+        async def get_drones_status():
+            """各机规划器状态 + 配送编排器状态(只读,供前端图例轮询)。"""
+            import json as _json
+            result: dict[str, Any] = {"ok": True, "planners": {}, "coordinator": {}}
+            try:
+                from src.plugins.ros_terminal import get_ros_terminal_plugin
+                plugin = get_ros_terminal_plugin()
+                result["planners"] = _json.loads(await plugin.planner_status())
+                if plugin.coordinator is not None:
+                    result["coordinator"] = plugin.coordinator.status()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("get_drones_status 失败: %s", exc)
+                result["ok"] = False
+                result["error"] = str(exc)
+            return result
 
         @app.post("/api/grasp_task")
         async def post_grasp_task(request: Request):

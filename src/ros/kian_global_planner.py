@@ -35,6 +35,7 @@ class KianGlobalPlanner:
         self.hit_keep_radius = float(config.get("hit_keep_radius", 0.45))
         namespace = str(config.get("namespace", "a")).strip("/")
         drone_id = str(config.get("drone_id", "0"))
+        self.drone_key = str(config.get("drone_key") or f"{namespace}{drone_id}")
         prefix = f"/{namespace}/" if namespace else "/"
         self.odom_topic = f"{prefix}drone_{drone_id}_Odometry_world"
         self.cloud_topic = f"{prefix}drone_{drone_id}_cloud_registered_world"
@@ -62,7 +63,13 @@ class KianGlobalPlanner:
         self._monitoring_goal: Optional[tuple[float, float]] = None
         self._monitoring_goal_type: int = 0
         self.completion_threshold = float(config.get("completion_threshold", 0.5))
+        # 多机防撞:其他无人机位置 / 预约路径走廊的膨胀半径(米)
+        self.safety_radius = float(config.get("safety_radius", 1.0))
+        self._last_path_points: list[tuple[float, float]] = []
         self._completion_callback: Optional[Callable] = None
+        # 放物到达后是否由 planner 自带逻辑触发返航降落。
+        # 单机默认 True;多机编排器接管时置 False(由 coordinator 决定回区还是降落)。
+        self._auto_land_enabled = True
         self._landing_triggered = False
         self._pending_landing: Optional[tuple[float, float]] = None
         self._static_points = self._load_pcd_xyz(self.pcd_path)
@@ -93,7 +100,8 @@ class KianGlobalPlanner:
         logger.info("KianGlobalPlanner: ROS attached odom=%s cloud=%s path=%s",
                     self.odom_topic, self.cloud_topic, self.path_topic)
 
-    def dispatch_selected(self, selected: dict[str, Any], goal_type: int) -> dict[str, Any]:
+    def dispatch_selected(self, selected: dict[str, Any], goal_type: int,
+                          external_obstacles: Optional[list[tuple[float, float]]] = None) -> dict[str, Any]:
         if goal_type not in (0, 1, 2, 3):
             raise ValueError("goal_type must be one of 0(normal), 1(pickup), 2(place), 3(land)")
         if not self.available:
@@ -112,9 +120,10 @@ class KianGlobalPlanner:
         msg.yaw_deg = -1.0
         msg.interrupt_mode = 0
         self._goal_pub.publish(msg)
-        return self.plan_and_publish(msg)
+        return self.plan_and_publish(msg, external_obstacles=external_obstacles)
 
-    def plan_and_publish(self, goal_msg: Any) -> dict[str, Any]:
+    def plan_and_publish(self, goal_msg: Any,
+                         external_obstacles: Optional[list[tuple[float, float]]] = None) -> dict[str, Any]:
         with self._lock:
             if self._latest_odom is None:
                 raise RuntimeError("world odometry is not ready")
@@ -126,12 +135,15 @@ class KianGlobalPlanner:
                 raise RuntimeError(
                     f"目标点 ({goal[0]:.2f}, {goal[1]:.2f}) 落在禁飞区内,已拒绝下发"
                 )
-            occupancy = self._build_occupancy(self._latest_live_points, zones=zones)
+            occupancy = self._build_occupancy(
+                self._latest_live_points, zones=zones, external_obstacles=external_obstacles
+            )
             start_cell = self._adjust_to_free(self._world_to_grid(*start), occupancy)
             goal_cell = self._adjust_to_free(self._world_to_grid(*goal), occupancy)
             cells = self._astar(start_cell, goal_cell, occupancy)
             points = self._decimate([self._grid_to_world(*cell) for cell in cells])
             self._last_goal = goal
+            self._last_path_points = list(points)
 
         path_msg = self._path_msg_cls()
         path_msg.header = goal_msg.header
@@ -155,11 +167,12 @@ class KianGlobalPlanner:
             if asyncio.iscoroutine(rendered):
                 asyncio.create_task(rendered)
         self._last_plan = {
+            "drone_key": self.drone_key,
             "status": "published", "waypoints": len(points), "goal_type": int(goal_msg.goal_type),
             "goal": {"x": goal[0], "y": goal[1]}, "topic": self.path_topic, "updated_at": time.time(),
         }
         logger.info("KianGlobalPlanner: published %d waypoints type=%d", len(points), goal_msg.goal_type)
-        if int(goal_msg.goal_type) == 2 and len(points) > 1:
+        if self._auto_land_enabled and int(goal_msg.goal_type) == 2 and len(points) > 1:
             self._monitoring_goal = points[-1]
             self._monitoring_goal_type = 2
             logger.info("KianGlobalPlanner: monitoring PLACE goal (%.2f, %.2f)", points[-1][0], points[-1][1])
@@ -171,6 +184,7 @@ class KianGlobalPlanner:
     def status(self) -> dict[str, Any]:
         with self._lock:
             return {
+                "drone_key": self.drone_key,
                 "enabled": self.enabled, "available": self.available, "map_ready": True,
                 "pcd_path": str(self.pcd_path), "odom_ready": self._latest_odom is not None,
                 "path_topic": self.path_topic, "last_plan": self._last_plan,
@@ -233,6 +247,15 @@ class KianGlobalPlanner:
     def set_completion_callback(self, callback: Callable) -> None:
         self._completion_callback = callback
 
+    def set_auto_land(self, enabled: bool) -> None:
+        """开/关 planner 自带的"放物到达→自动返航降落"。多机编排器接管时关闭。"""
+        self._auto_land_enabled = bool(enabled)
+
+    def latest_odom(self) -> Optional[tuple[float, float]]:
+        """线程安全读取最新里程计 (x, y);无数据返回 None。供编排器轮询。"""
+        with self._lock:
+            return self._latest_odom
+
     def poll_pending_landing(self) -> Optional[tuple[float, float]]:
         """取出待处理的 landing 目标（线程安全）。由 asyncio 侧轮询调用。"""
         with self._lock:
@@ -280,7 +303,8 @@ class KianGlobalPlanner:
                     self.pcd_path, len(points), self.width, self.height)
 
     def _build_occupancy(self, live_points: np.ndarray, now_s: Optional[float] = None,
-                         zones: Optional[list[dict[str, Any]]] = None) -> np.ndarray:
+                         zones: Optional[list[dict[str, Any]]] = None,
+                         external_obstacles: Optional[list[tuple[float, float]]] = None) -> np.ndarray:
         occupancy = self._static_occupancy.copy()
         if self.enable_ray_clearing:
             current_time = time.time() if now_s is None else float(now_s)
@@ -293,6 +317,9 @@ class KianGlobalPlanner:
             zones = self._active_no_fly_zones()
         if zones:
             occupancy |= self._no_fly_occupancy(zones)
+        # 多机防撞：其他无人机当前位置 + 已预约路径走廊,按 safety_radius 膨胀为占用。
+        if external_obstacles:
+            occupancy |= self._occupancy_for_xy(external_obstacles, self.safety_radius)
         return occupancy
 
     def _apply_ray_clearing(self, points: np.ndarray, now_s: float) -> int:
@@ -343,8 +370,29 @@ class KianGlobalPlanner:
                             occupancy[ny, nx] = True
         return occupancy
 
+    def _occupancy_for_xy(self, xy_points: list[tuple[float, float]], radius_m: float) -> np.ndarray:
+        """把一组 (x, y) 平面点按 radius_m 膨胀成占用栅格(多机防撞用,无 z 过滤)。"""
+        occupancy = np.zeros((self.height, self.width), dtype=bool)
+        radius = int(math.ceil(max(0.0, radius_m) / self.resolution))
+        for px, py in xy_points:
+            gx = int(math.floor((float(px) - self.min_x) / self.resolution))
+            gy = int(math.floor((float(py) - self.min_y) / self.resolution))
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+                    if dx * dx + dy * dy <= radius * radius:
+                        nx, ny = gx + dx, gy + dy
+                        if 0 <= nx < self.width and 0 <= ny < self.height:
+                            occupancy[ny, nx] = True
+        return occupancy
+
+    def last_path_points(self) -> list[tuple[float, float]]:
+        """最近一次规划出的路径点(供编排器登记路径预约)。"""
+        with self._lock:
+            return list(self._last_path_points)
+
     def _active_no_fly_zones(self) -> list[dict[str, Any]]:
-        """读取当前禁飞区,并只保留 z 区间覆盖了飞行高度 planning_z 的(对本次 2D 规划生效)。
+        """读取当前禁飞区。z 仅前端展示用,2D 规划在固定 planning_z 单层跑,
+        所有框选禁区一律按 xy 生效(不再用 z 区间过滤,避免禁区因高度对不上而悄悄失效)。
 
         禁飞区由 Web 框选 → POST /api/noflyzone → NoFlyZoneBridge 存储,这里直接读
         bridge 单例的最新 payload,与规划器解耦(不依赖 web_server 句柄)。
@@ -355,20 +403,7 @@ class KianGlobalPlanner:
         except Exception as exc:
             logger.warning("KianGlobalPlanner: 读取禁飞区失败: %s", exc)
             return []
-        if not payload:
-            return []
-        active: list[dict[str, Any]] = []
-        for zone in payload.get("zones", []) or []:
-            try:
-                z_min = float(zone["zMin"])
-                z_max = float(zone["zMax"])
-            except (KeyError, TypeError, ValueError):
-                # 没给 z 的禁飞区按"全高度生效"处理,保守拦截
-                active.append(zone)
-                continue
-            if z_min <= self.planning_z <= z_max:
-                active.append(zone)
-        return active
+        return (payload or {}).get("zones", []) or []
 
     def _no_fly_occupancy(self, zones: list[dict[str, Any]]) -> np.ndarray:
         """把生效禁飞区的 (x,y) 矩形范围内的格子标记为占用。"""

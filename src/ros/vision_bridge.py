@@ -22,6 +22,7 @@ class VisionBridge:
         self._lock = threading.Lock()
         self._latest_jpeg: Optional[bytes] = None
         self._available = False
+        self._cam_enable_cli = None
 
     @property
     def available(self) -> bool:
@@ -31,10 +32,15 @@ class VisionBridge:
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
         from sensor_msgs.msg import CompressedImage
         from std_msgs.msg import Int8
+        from std_srvs.srv import SetBool
 
         from drone_task_interfaces.msg import VisionDetectResult
 
         self._node = node
+
+        # 相机推流开关 service client。用相对名 "camera/enable"，靠 node 的
+        # namespace="a" 自动拼成 /a/camera/enable（与相机 topic 同款命名空间处理）。
+        self._cam_enable_cli = node.create_client(SetBool, "camera/enable")
 
         # Subscriber QoS: BEST_EFFORT, KEEP_LAST, depth=1 (matching vision_server.py)
         image_qos = QoSProfile(
@@ -62,12 +68,51 @@ class VisionBridge:
         self._available = True
         logger.info("VisionBridge: subscribed to %s, publishing vision/result + dual_validator/verified", self.topic)
 
+    def set_camera_enable(self, enable: bool, timeout: float = 2.0) -> bool:
+        """调用 /a/camera/enable (std_srvs/SetBool) 开/关无人机相机推流。
+
+        注意：本 node 已被 SingleThreadedExecutor 在独立线程 spin，这里**不能**
+        用 spin_until_future_complete（会和后台 executor 抢同一个 node 死锁）。
+        改用 done_callback + Event 等待，让后台 executor 线程去完成 future。
+        阻塞调用，建议上层用 asyncio.to_thread 包起来。
+        """
+        from std_srvs.srv import SetBool
+
+        cli = self._cam_enable_cli
+        if cli is None:
+            logger.warning("VisionBridge: camera/enable client 未初始化")
+            return False
+        if not cli.wait_for_service(timeout_sec=timeout):
+            logger.warning("VisionBridge: /a/camera/enable service 未上线，跳过 (enable=%s)", enable)
+            return False
+
+        req = SetBool.Request()
+        req.data = bool(enable)
+        future = cli.call_async(req)
+        done = threading.Event()
+        future.add_done_callback(lambda _f: done.set())
+        if not done.wait(timeout):
+            logger.warning("VisionBridge: camera/enable 调用超时 (enable=%s)", enable)
+            return False
+        try:
+            resp = future.result()
+            ok = bool(resp and resp.success)
+            logger.info("VisionBridge: camera/enable=%s -> success=%s (%s)",
+                        enable, ok, getattr(resp, "message", ""))
+            return ok
+        except Exception as exc:  # noqa: BLE001
+            logger.error("VisionBridge: camera/enable 调用异常: %s", exc)
+            return False
+
     def detach(self) -> None:
         if self._sub is not None and self._node is not None:
             self._node.destroy_subscription(self._sub)
+        if self._cam_enable_cli is not None and self._node is not None:
+            self._node.destroy_client(self._cam_enable_cli)
         self._sub = None
         self._result_pub = None
         self._verified_pub = None
+        self._cam_enable_cli = None
         self._node = None
         self._available = False
 

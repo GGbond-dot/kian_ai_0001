@@ -98,21 +98,36 @@
     hide();
   }
 
-  // 关闭按钮
+  // 调 /api/camera_enable 开/关无人机相机推流（平时关省 CPU，要看时再开）
+  function setCamera(enable) {
+    fetch('/api/camera_enable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enable: enable }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { console.log('[video] camera_enable=%s ->', enable, d); })
+      .catch(function (e) { console.warn('[video] camera_enable 请求失败:', e); });
+  }
+
+  // 关闭按钮：关浮窗 + 关推流
   if (btnClose) {
     btnClose.addEventListener('click', function () {
       disconnect();
+      setCamera(false);
     });
   }
 
-  // 手动触发按钮：随时开/关浮窗（不依赖视频流，无流时显示占位便于预览/测试）
+  // 手动触发按钮：开浮窗 = 开推流，关浮窗 = 关推流
   if (btnToggle) {
     btnToggle.addEventListener('click', function () {
       if (visible) {
         hide();
+        setCamera(false);
       } else {
         show();
         connect();            // 重新打开时确保在尝试连流
+        setCamera(true);
       }
     });
   }

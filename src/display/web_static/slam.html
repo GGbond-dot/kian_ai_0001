@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SLAM Viewer</title>
   <link rel="stylesheet" href="/static/slam.css">
-  <link rel="stylesheet" href="/static/video.css?v=3">
+  <link rel="stylesheet" href="/static/video.css?v=4">
   <script>
     if (new URLSearchParams(location.search).get('embedded') === '1') {
       document.documentElement.classList.add('embedded');
@@ -68,6 +68,9 @@
     <div id="grasp-info" class="grasp-info">暂无目标,点击"开始框选"在地图上框出抓取区域,后端会取中心点下发。</div>
   </div>
 
+  <!-- 多机状态图例(由 /api/drones/status 轮询填充;单机时自动隐藏) -->
+  <div id="drone-legend" class="drone-legend" style="display:none"></div>
+
   <div class="slam-statusbar">
     <span id="stat-base">基底: -</span>
     <span id="stat-map">累积: -</span>
@@ -94,7 +97,7 @@
 <script type="module" src="/static/slam.js?v=21"></script>
 
 <!-- 视频浮窗触发按钮 -->
-<button id="btn-video-toggle" class="video-toggle-btn" type="button" title="显示/隐藏摄像头画面">📹 视频</button>
+<button id="btn-video-toggle" class="video-toggle-btn" type="button" title="开/关摄像头画面与推流">📹</button>
 
 <!-- 视频浮窗：摄像头标注画面 -->
 <div id="video-pip" class="video-pip" aria-hidden="true">
@@ -105,7 +108,7 @@
   <img id="video-feed" class="video-feed" alt="Camera Feed" src="">
   <div id="video-placeholder" class="video-placeholder">等待视频流…</div>
 </div>
-<script src="/static/video.js?v=2"></script>
+<script src="/static/video.js?v=3"></script>
 
 </body>
 </html>

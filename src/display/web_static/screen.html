@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>小递 · 屏幕面板</title>
+  <link rel="stylesheet" href="/static/screen.css?v=5">
+</head>
+<body>
+  <!-- 屏幕物理安装是颠倒的,默认整体旋转 180°;调试时可用 ?flip=0 关闭 -->
+  <div id="screen" data-state="offline">
+    <header class="topbar">
+      <span class="conn-dot"></span>
+      <span class="conn-text">连接中…</span>
+      <span class="status-text">状态: 未连接</span>
+    </header>
+
+    <main class="stage">
+      <div class="emotion-halo">
+        <img id="emotion-img" src="/emojis/neutral.gif" alt="表情" draggable="false">
+        <canvas id="emotion-canvas" style="display:none"></canvas>
+      </div>
+      <span class="state-label"></span>
+      <p id="speech-text">待命</p>
+    </main>
+
+    <footer class="controls">
+      <button id="btn-talk" class="ctl talk" data-manual-button>按住后说话</button>
+      <button id="btn-auto" class="ctl" style="display:none">开始对话</button>
+      <button id="btn-abort" class="ctl warn">打断</button>
+      <button id="btn-mode" class="ctl">手动对话</button>
+    </footer>
+  </div>
+
+  <script src="/static/screen.js?v=4"></script>
+</body>
+</html>

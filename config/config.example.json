@@ -10,7 +10,7 @@
     "max_tokens": 2048,
     "temperature": 0.7,
     "max_history_turns": 20,
-    "system_prompt": "你是多无人机协同物流系统的智能终端助手。优先准确理解操作员意图；需要执行动作时调用可用工具；回复要简短、明确。\n\n当无人机到达送物地点后，应调用 vision.get_detection 查询摄像头检测到的 QR 码和货物信息。确认检测结果正确后，操作员确认后，调用 vision.dispatch_place 下发放物地点(goal_type=2)。"
+    "system_prompt": "你是多无人机协同物流系统的智能终端助手，名字叫「小递」。回复要简短、明确，适合语音播报。\n\n执行规则：\n1. 需要执行动作（起飞、降落、悬停、下发抓取/放置目标等）时，必须真实调用对应工具；严禁在未调用工具的情况下声称已执行。\n2. 操作员意图清晰时直接调用工具；意图模糊时，先用一句话复述你的理解并以问号结尾等待确认，确认后再调用工具。\n3. 工具返回失败时如实播报失败原因，不要掩饰或假装成功。\n\n起飞即配送：操作员说“起飞/起飞配送/货到了配送/开始配送”一律是启动配送任务，调用 drone.start_delivery（点名某架机就带 drone_key，未点名用默认机）。起飞前必须已在地图框选抓取区；若未框选，工具会返回提醒，请如实播报让操作员先画抓取框，不要再调用 drone.takeoff 强行起飞。drone.takeoff/land/hover 是底层手动指令，仅在操作员明确要单独控制某架机起降悬停时才用。\n\n送物流程：无人机到达送物地点后，调用 vision.get_detection 查询摄像头检测到的 QR 码和货物信息并播报给操作员；操作员确认后，调用 vision.dispatch_place 下发放物地点(goal_type=2)。\n\n深度任务：\n- 任务汇报/复盘：操作员要求汇报、复盘或总结任务时，调用 drone.status（可用 limit 参数取更多记录）、drone.planner_status、vision.get_detection，把执行了哪些指令、抓取/放置了什么货物、规划路径情况、有无异常，综合成一段简短的口头总结。\n- 起飞前检查：操作员要求检查时，调用 drone.planner_status 核查规划器/地图/里程计是否就绪，调用 vision.get_detection 确认视觉链路，逐项简短播报就绪状态，发现未就绪项要明确指出。\n- 失败诊断：操作员问为什么失败、怎么回事时，调用相关状态工具分析原因，用一两句话解释并给出补救建议（如：请先在地图上框选目标）。"
   },
   "LLM_FAST": {
     "base_url": "https://opencode.ai/zen/go/v1",
@@ -18,18 +18,100 @@
     "model": "mimo-v2.5",
     "max_tokens": 256,
     "temperature": 0.7,
-    "system_prompt": "你是物流终端机器人的语音助手。回答要简短自然，一两句话即可。如果用户的请求超出你能处理的范围，直接简短回复「我做不了」或「这个我没办法处理」，不要硬编。"
+    "system_prompt": "你是物流终端机器人的语音助手，名字叫「小递」。回答要简短自然，一两句话即可。凡是涉及无人机操控、抓取、放置、送货、目标下发、视觉检测、地图规划的请求，你没有执行能力，一律直接回复「我做不了」，不要假装答应。其他超出你能处理范围的请求，也直接简短回复「我做不了」或「这个我没办法处理」，不要硬编。"
   },
   "INTENT_KEYWORDS": {
-    "drone.takeoff": ["起飞", "开始起飞", "系统启动", "执行任务"],
-    "drone.hover": ["悬停", "保持悬停"],
-    "drone.land": ["降落", "返航", "停止任务"],
-    "mapping.view": ["查看建图效果", "看建图", "看地图", "打开rviz"],
-    "drone.status": ["无人机状态", "查看状态", "任务状态"]
+    "drone.start_delivery": [
+      "起飞",
+      "开始起飞",
+      "起飞配送",
+      "货到了配送",
+      "货到了",
+      "开始配送",
+      "系统启动",
+      "执行任务",
+      "出发"
+    ],
+    "drone.hover": [
+      "悬停",
+      "保持悬停"
+    ],
+    "drone.land": [
+      "降落",
+      "返航",
+      "停止任务"
+    ],
+    "mapping.view": [
+      "查看建图效果",
+      "看建图",
+      "看地图",
+      "打开rviz"
+    ],
+    "drone.status": [
+      "无人机状态",
+      "查看状态",
+      "任务状态"
+    ],
+    "drone.dispatch_selected_goal": {
+      "keywords": [
+        "去抓取",
+        "去抓",
+        "执行框选任务",
+        "下发框选目标"
+      ],
+      "ack": "",
+      "args": {
+        "goal_type": 1
+      }
+    },
+    "vision.dispatch_place": [
+      "确认放置",
+      "放下去",
+      "确认下发",
+      "执行放置"
+    ],
+    "camera_on": {
+      "keywords": ["打开摄像头", "开启视频", "开摄像头", "打开视频", "开启摄像头"],
+      "tool": "vision.set_camera",
+      "ack": "",
+      "args": { "enable": true }
+    },
+    "camera_off": {
+      "keywords": ["关闭摄像头", "关掉摄像头", "关视频", "关闭视频", "关摄像头"],
+      "tool": "vision.set_camera",
+      "ack": "",
+      "args": { "enable": false }
+    }
   },
   "ROUTER": {
-    "tier2_keywords": [],
-    "fallback_phrases": ["我做不了", "做不了", "没办法处理", "无法处理", "不支持", "我不会"],
+    "tier2_keywords": [
+      "抓取",
+      "去拿",
+      "去这里",
+      "放置",
+      "放货",
+      "送货",
+      "下发",
+      "框选",
+      "检测",
+      "识别",
+      "规划",
+      "为什么",
+      "怎么回事",
+      "日志",
+      "汇报",
+      "复盘",
+      "总结",
+      "检查"
+    ],
+    "fallback_phrases": [
+      "我做不了",
+      "做不了",
+      "没办法处理",
+      "无法处理",
+      "不支持",
+      "我不会"
+    ],
     "fallback_scan_chars": 30,
     "fast_path_enabled": true
   },
@@ -76,16 +158,48 @@
     "drone_id": "0",
     "completion_threshold": 0.5
   },
+  "DRONES": [
+    {
+      "key": "a0",
+      "label": "一号机",
+      "namespace": "a",
+      "drone_id": "0",
+      "command_topic": "/a/drone_command",
+      "goal_topic": "/a/goal_with_type",
+      "enabled": true
+    },
+    {
+      "key": "b1",
+      "label": "二号机",
+      "namespace": "b",
+      "drone_id": "1",
+      "command_topic": "/b/drone_command",
+      "goal_topic": "/b/goal_with_type",
+      "enabled": true
+    }
+  ],
+  "MULTI_DRONE": {
+    "safety_radius": 1.0,
+    "reservation_ttl_sec": 120,
+    "default_drone_key": "a0"
+  },
   "VISION": {
     "enabled": false,
     "camera_topic": "camera/image_raw/compressed",
     "model_path": "models/yolo_best_openvino/best.xml",
-    "device": "CPU",
+    "device": "NPU",
     "input_width": 640,
     "input_height": 640,
     "confidence_threshold": 0.3,
     "enable_qr": true,
     "goods_db_path": "config/goods_location.yaml"
+  },
+  "SCREEN_PANEL": {
+    "enabled": false,
+    "browser": "firefox",
+    "url": "",
+    "display": ":0",
+    "extra_args": []
   },
   "MEMORY": {
     "enabled": true,

@@ -34,6 +34,9 @@ CHAN_MAP = 0x01
 CHAN_SCAN = 0x02
 CHAN_ODOM = 0x03
 CHAN_PATH = 0x04
+# 多机:第 0 架(默认机)的规划路径仍走 CHAN_PATH(0x04,向后兼容);
+# 第 i(>0)架走 CHAN_PATH_DRONE_BASE + i。老前端遇到未知 channel 自动忽略,不会崩。
+CHAN_PATH_DRONE_BASE = 0x40
 
 # ===================== Stub 模式 =====================
 # 当 rclpy 不可用（PC 本地无 ROS）或显式开启时，推假数据用于前端联调

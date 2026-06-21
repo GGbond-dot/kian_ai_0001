@@ -168,12 +168,22 @@ class DroneCommandBridge:
         self._publisher = None
 
 
-_bridge: Optional[DroneCommandBridge] = None
+# 按 topic 的进程级注册表(多机:每个 command_topic 一个 bridge)
+_bridges: dict[str, DroneCommandBridge] = {}
 
 
-def get_drone_command_bridge() -> DroneCommandBridge:
-    """获取进程级单例。第一次调用只构造,真正启动需 await bridge.start()。"""
-    global _bridge
-    if _bridge is None:
-        _bridge = DroneCommandBridge()
-    return _bridge
+def get_drone_command_bridge(topic: str = DRONE_COMMAND_TOPIC) -> DroneCommandBridge:
+    """获取指定 topic 的进程级 bridge 单例(默认 /drone_command,兼容单机旧调用)。
+
+    第一次调用只构造,真正启动需 await bridge.start()。
+    """
+    bridge = _bridges.get(topic)
+    if bridge is None:
+        bridge = DroneCommandBridge(topic)
+        _bridges[topic] = bridge
+    return bridge
+
+
+def get_all_drone_command_bridges() -> list[DroneCommandBridge]:
+    """返回已构造的所有 bridge(供 WebDisplay 统一 start/stop)。"""
+    return list(_bridges.values())

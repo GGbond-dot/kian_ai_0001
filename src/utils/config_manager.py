@@ -99,6 +99,12 @@ class ConfigManager:
             "namespace": "a",
             "drone_id": "0",
         },
+        "DRONES": [],
+        "MULTI_DRONE": {
+            "safety_radius": 1.0,
+            "reservation_ttl_sec": 120,
+            "default_drone_key": "a0",
+        },
     }
 
     def __new__(cls):

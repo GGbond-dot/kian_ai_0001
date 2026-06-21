@@ -32,19 +32,31 @@ def match_intent(text: str) -> Optional[IntentHit]:
 
     norm = text.strip().lower()
     for tool_name, spec in intent_map.items():
-        if not isinstance(spec, dict):
+        # 两种配置格式：裸 list（仅关键词）或 dict
+        # （{"keywords": [...], "ack": "...", "args": {...}}，ack/args 可选）
+        if isinstance(spec, list):
+            keywords, ack, args = spec, "", {}
+            real_tool = tool_name
+        elif isinstance(spec, dict):
+            keywords = spec.get("keywords", []) or []
+            ack = spec.get("ack", "") or ""
+            args = spec.get("args", {}) or {}
+            # 可选 "tool" 覆盖 key 作为真正工具名，
+            # 让同一工具的不同 args（如开/关摄像头）能用不同 key 各配一条
+            real_tool = spec.get("tool") or tool_name
+        else:
             continue
-        for kw in spec.get("keywords", []) or []:
+        for kw in keywords:
             if kw and kw.lower() in norm:
                 hit = IntentHit(
-                    tool=tool_name,
-                    args={},
-                    ack=spec.get("ack", "") or "",
+                    tool=real_tool,
+                    args=dict(args),
+                    ack=ack,
                     matched=kw,
                 )
                 logger.info(
                     "[Tier0] 命中关键词 '%s' → 工具 %s ack=%r",
-                    kw, tool_name, hit.ack,
+                    kw, real_tool, hit.ack,
                 )
                 return hit
     return None

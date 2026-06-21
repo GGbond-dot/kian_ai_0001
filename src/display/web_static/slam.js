@@ -17,6 +17,10 @@ import { screenToWorldXY } from '/static/utils.js';
 
 const CFG = window.SLAM_CONFIG || {};
 const CHAN = { MAP: 0x01, SCAN: 0x02, ODOM: 0x03, PATH: 0x04 };
+// 多机:第 i(>0)架规划路径走 CHAN_PATH_DRONE_BASE + i(与后端 slam_constants 一致)
+const CHAN_PATH_DRONE_BASE = 0x40;
+// 各机路径配色(index 0 = 默认机沿用绿色 pathLine,1+ 用下列色)
+const DRONE_PATH_COLORS = [0x33ff88, 0xffaa33, 0x33aaff, 0xff55cc, 0xaaff33];
 
 // ===================== three.js 场景 =====================
 const canvas = document.getElementById('slam-canvas');
@@ -278,6 +282,19 @@ pathGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0),
 const pathMat = new THREE.LineBasicMaterial({ color: 0x33ff88 });
 const pathLine = new THREE.Line(pathGeom, pathMat);
 scene.add(pathLine);
+
+// 多机:额外机的规划路径线(按 drone index 动态创建)
+const extraPathLines = {};  // index -> THREE.Line
+function getDronePathLine(index) {
+  if (extraPathLines[index]) return extraPathLines[index];
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+  const color = DRONE_PATH_COLORS[index % DRONE_PATH_COLORS.length];
+  const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color }));
+  scene.add(line);
+  extraPathLines[index] = line;
+  return line;
+}
 
 // ===== 当前位姿 (箭头) =====
 const poseArrow = new THREE.ArrowHelper(
@@ -1070,6 +1087,20 @@ function onBinary(buf) {
     case CHAN.ODOM: return updateOdom(dv);
     case CHAN.PATH: return updatePath(buf);
   }
+  // 多机:额外机的规划路径(0x41..0x4F)
+  if (channel > CHAN_PATH_DRONE_BASE && channel < CHAN_PATH_DRONE_BASE + 0x10) {
+    return updateDronePath(channel - CHAN_PATH_DRONE_BASE, buf);
+  }
+}
+
+function updateDronePath(index, buf) {
+  const dv = new DataView(buf);
+  const n = dv.getUint32(1, true);
+  const xyz = new Float32Array(buf.slice(5, 5 + n * 12));
+  const line = getDronePathLine(index);
+  line.geometry.setAttribute('position', new THREE.BufferAttribute(xyz, 3));
+  line.geometry.setDrawRange(0, n);
+  line.geometry.computeBoundingSphere();
 }
 
 function rebuildMapGeom() {
@@ -1276,6 +1307,43 @@ async function loadBaseMap() {
     statBase.textContent = `基底: 加载失败`;
   }
 }
+
+// ===================== 多机状态图例 =====================
+// 轮询只读 JSON 接口(不碰二进制 SLAM 帧),渲染每架机的配送阶段/规划状态。
+const PHASE_LABEL = {
+  idle: '空闲', goto_zone: '飞往抓取区', at_zone: '抓取中',
+  delivering: '配送中', landing: '返航降落',
+};
+async function pollDronesStatus() {
+  const el = document.getElementById('drone-legend');
+  if (!el) return;
+  try {
+    const [dRes, sRes] = await Promise.all([
+      fetch('/api/drones').then(r => r.json()),
+      fetch('/api/drones/status').then(r => r.json()),
+    ]);
+    const drones = (dRes && dRes.drones) || [];
+    const coord = (sRes && sRes.coordinator) || {};
+    const planners = (sRes && sRes.planners) || {};
+    const cDrones = coord.drones || {};
+    if (!drones.length) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.innerHTML = drones.map((d, i) => {
+      const color = '#' + DRONE_PATH_COLORS[i % DRONE_PATH_COLORS.length].toString(16).padStart(6, '0');
+      const ct = cDrones[d.key] || {};
+      const phase = PHASE_LABEL[ct.phase] || '—';
+      const pst = planners[d.key] || {};
+      const odom = pst.odom_ready ? '✓' : '✗';
+      return `<div class="drone-row"><span class="drone-dot" style="background:${color}"></span>`
+           + `<b>${d.label || d.key}</b> <span class="drone-phase">${phase}</span>`
+           + `<span class="drone-odom">odom ${odom}</span></div>`;
+    }).join('');
+  } catch (e) {
+    /* 接口未就绪时静默 */
+  }
+}
+setInterval(pollDronesStatus, 1000);
+pollDronesStatus();
 
 loadBaseMap();
 connect();

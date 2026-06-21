@@ -77,6 +77,10 @@ class LocalAgentProtocol(Protocol):
         # 与 _opus_buffer 互斥使用：本轮谁有数据走谁
         self._external_pcm_chunks: List[bytes] = []
 
+        # 粘性路由：Tier 2 以问句结束（等待操作员确认）时置位，
+        # 下一句话跳过 Tier 1 / tier2-direct 直送 Tier 2（Tier 0 明确口令仍优先）
+        self._tier2_sticky: bool = False
+
         # 流式 STT 会话（paraformer-realtime-v2）：边录边传，停止时立刻拿最终文本
         # 失败/超时则自动降级到批量 transcribe_pcm（缓冲始终保留作兜底）
         self._stream_stt = None
@@ -1176,6 +1180,12 @@ class LocalAgentProtocol(Protocol):
                     await self._run_tier0_intent(user_text, hit)
                     return
 
+            # ── 粘性路由：上轮 Tier 2 以提问结束，本句是对它的回答 ──
+            if self._tier2_sticky:
+                self._tier2_sticky = False
+                await self._run_tier2_full(user_text, reason="tier2-sticky")
+                return
+
             # ── Tier 2 直达：高级语义关键词跳过 Tier 1 ────────
             if fast_path_enabled and match_tier2_direct(user_text):
                 await self._run_tier2_full(user_text, reason="tier2-direct")
@@ -1248,7 +1258,7 @@ class LocalAgentProtocol(Protocol):
         history = agent.get_history()
         sys_prompt = self.config.get_config(
             "LLM_FAST.system_prompt",
-            "你是物流终端机器人的语音助手，回答简短自然。"
+            "你是物流终端机器人的语音助手，名字叫「小递」，回答简短自然。"
         )
         messages = [{"role": "system", "content": sys_prompt}] + list(history) + [
             {"role": "user", "content": user_text}
@@ -1391,6 +1401,11 @@ class LocalAgentProtocol(Protocol):
             logger.info(f"[Tier2] LLM 回复：'{reply[:100]}{'...' if len(reply) > 100 else ''}'")
             self._fire_json({"type": "tts", "state": "sentence_start", "text": reply})
             await self._play_tts_any(reply)
+
+        # 回复以问句收尾 = 在等操作员确认 → 下一句直送 Tier 2
+        self._tier2_sticky = reply.rstrip().endswith(("？", "?"))
+        if self._tier2_sticky:
+            logger.info("[Tier2] 回复以问句结束，置粘性路由，下一句直送 Tier 2")
 
     async def _consume_llm_stream_to_remote_tts(
         self,
